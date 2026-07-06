@@ -37,6 +37,11 @@ dependencies = [
     "seaborn>=0.12.0",
 ]
 
+[project.optional-dependencies]
+cwa = [
+    "openmovement @ git+https://github.com/digitalinteraction/openmovement-python.git@087ac7b5a80b866c400d8021b7a2716d247fc034",
+]
+
 [dependency-groups]
 dev = [
     "poethepoet>=0.22.0,<0.23",
@@ -59,6 +64,9 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.poe.tasks]
 _format = "ruff format ."
