@@ -52,9 +52,12 @@ def _cwa_to_dataframe(cwa_data: Any, *, include_time_index: bool) -> tuple[pd.Da
     sampling_rate_hz = float(cwa_data.get_sample_rate())
 
     if include_time_index:
+        # use utc unix seconds as a numeric index. On some hpc stacks
+        # pandas DatetimeIndex and pd.to_datetime(..., unit="s") segfaults, float indices do not.
         start_time = cwa_data.get_start_time()
-        df.index = pd.DatetimeIndex(
-            pd.to_datetime(start_time + np.arange(len(df)) / sampling_rate_hz, unit="s", utc=True),
+        df.index = pd.Index(
+            start_time + np.arange(len(df)) / sampling_rate_hz,
+            dtype=np.float64,
             name="time",
         )
     else:
@@ -86,7 +89,7 @@ def load_cwa_as_dataset(
     sensor_position
         Sensor position label used as the key in the dataset sensor dictionary.
     include_time_index
-        If True, use a UTC datetime index derived from the CWA start time.
+        If True, use a UTC Unix-time index in seconds derived from the CWA start time.
         If False, use a :class:`~pandas.RangeIndex` (default).
     resample_hz
         Optional target sampling rate in Hz. When provided, sensor data is resampled

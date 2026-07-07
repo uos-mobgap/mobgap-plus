@@ -40,6 +40,16 @@ class TestCwaAdapter:
         np.testing.assert_allclose(df["gyr_y"], [20.0, 21.0])
         np.testing.assert_allclose(df["gyr_z"], [30.0, 31.0])
 
+    def test_cwa_to_dataframe_time_index(self):
+        df, _ = _cwa_to_dataframe(_StubCwaData(), include_time_index=True)
+
+        assert isinstance(df.index, pd.Index)
+        assert not isinstance(df.index, pd.DatetimeIndex)
+        assert df.index.name == "time"
+        assert df.index.dtype == np.float64
+        assert len(df.index) == 2
+        np.testing.assert_allclose(df.index, [1_700_000_000.0, 1_700_000_000.01])
+
     def test_missing_participant_metadata_raises(self):
         with pytest.raises(ValueError, match="height_m"):
             load_cwa_as_dataset(
