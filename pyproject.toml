@@ -39,8 +39,11 @@ dependencies = [
 
 [project.optional-dependencies]
 cwa = [
-    "openmovement @ git+https://github.com/digitalinteraction/openmovement-python.git@087ac7b5a80b866c400d8021b7a2716d247fc034",
+    "omcwa; python_version >= '3.11'",
 ]
+
+[tool.uv.sources]
+omcwa = { git = "ssh://git@github.com/yourGrand/omcwa" }
 
 [dependency-groups]
 dev = [

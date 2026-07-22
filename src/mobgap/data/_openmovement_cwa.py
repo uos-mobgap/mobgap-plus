@@ -1,65 +1,73 @@
-"""Load Open Movement CWA files into MobGap datasets."""
+"""Load Open Movement CWA files into MobGap datasets.
+
+Requires the optional ``mobgap[cwa]`` extra, which installs ``omcwa``.
+"""
 
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
 import numpy as np
 import pandas as pd
 
 from mobgap.consts import GRAV_MS2, SF_SENSOR_COLS
 from mobgap.data._dataset_from_data import GaitDatasetFromData
-from mobgap.data_transform import Resample
+
+if TYPE_CHECKING:
+    from omcwa.types import ProcessedRecording
+
+CalibrationFailurePolicy = Literal["raise", "identity"]
 
 _REQUIRED_PARTICIPANT_METADATA_KEYS = ("height_m", "sensor_height_m", "cohort")
-_COLUMN_RENAME = {
-    "accel_x": "acc_x",
-    "accel_y": "acc_y",
-    "accel_z": "acc_z",
-    "gyro_x": "gyr_x",
-    "gyro_y": "gyr_y",
-    "gyro_z": "gyr_z",
-}
 
 
-def _import_cwa_data() -> type[Any]:
+def _import_process_cwa() -> Any:
     try:
-        from openmovement.load import CwaData
+        from omcwa import process_cwa
     except ImportError as exc:
         raise ImportError(
-            "The 'openmovement' package is required to load CWA files. "
+            "The 'omcwa' package is required to load CWA files. "
             "Install it with: pip install 'mobgap[cwa]'"
         ) from exc
-    return CwaData
+    return process_cwa
 
 
 def _validate_participant_metadata(participant_metadata: dict[str, Any]) -> None:
     missing = [key for key in _REQUIRED_PARTICIPANT_METADATA_KEYS if key not in participant_metadata]
     if missing:
-        raise ValueError(f"participant_metadata is missing required keys for MobilisedPipelineHealthy: {missing}")
+        raise ValueError(
+            f"participant_metadata is missing required keys "
+            f"for MobilisedPipelineHealthy: {missing}"
+        )
 
 
-def _cwa_to_dataframe(cwa_data: Any, *, include_time_index: bool) -> tuple[pd.DataFrame, float]:
-    sample_values = cwa_data.get_sample_values()
-    df = pd.DataFrame(sample_values, columns=cwa_data.labels)
-    df = df.rename(columns=_COLUMN_RENAME)
+def _recording_to_dataframe(
+    out: "ProcessedRecording",
+    *,
+    include_time_index: bool,
+) -> tuple[pd.DataFrame, float]:
+    """Convert an ``omcwa`` recording into MobGap sensor columns and units."""
+    if out.gyr is None:
+        raise ValueError("CWA recording has no gyroscope data; MobGap requires acc + gyr.")
 
-    for col in ("acc_x", "acc_y", "acc_z"):
-        if col in df.columns:
-            df[col] = df[col] * GRAV_MS2
+    df = pd.DataFrame(
+        {
+            "acc_x": out.acc[:, 0] * GRAV_MS2,
+            "acc_y": out.acc[:, 1] * GRAV_MS2,
+            "acc_z": out.acc[:, 2] * GRAV_MS2,
+            "gyr_x": out.gyr[:, 0],
+            "gyr_y": out.gyr[:, 1],
+            "gyr_z": out.gyr[:, 2],
+        }
+    )
 
     df = df[[col for col in SF_SENSOR_COLS if col in df.columns]]
 
-    sampling_rate_hz = float(cwa_data.get_sample_rate())
+    sampling_rate_hz = float(out.sample_rate_hz)
 
     if include_time_index:
         # use utc unix seconds as a numeric index. On some hpc stacks
         # pandas DatetimeIndex and pd.to_datetime(..., unit="s") segfaults, float indices do not.
-        start_time = cwa_data.get_start_time()
-        df.index = pd.Index(
-            start_time + np.arange(len(df)) / sampling_rate_hz,
-            dtype=np.float64,
-            name="time",
-        )
+        df.index = pd.Index(out.time.astype(np.float64), name="time")
     else:
         df.index = pd.RangeIndex(len(df), name="samples")
 
@@ -74,65 +82,129 @@ def load_cwa_as_dataset(
     sensor_position: str = "LowerBack",
     include_time_index: bool = False,
     resample_hz: Optional[float] = None,
+    calibrate: bool = True,
+    on_calibration_failure: CalibrationFailurePolicy = "raise",
+    time_range: Optional[tuple[float, float]] = None,
 ) -> GaitDatasetFromData:
     """Load a CWA file into a :class:`~mobgap.data.GaitDatasetFromData`.
+
+    This is a thin adapter over :func:`omcwa.process_cwa`. Decoding,
+    auto-calibration, and resampling are handled by ``omcwa``. This function
+    converts the result into MobGap column names/units and wraps it in a
+    :class:`~mobgap.data.GaitDatasetFromData` ready for mobgap pipelines.
 
     Parameters
     ----------
     path
         Path to the ``.cwa`` file.
     participant_metadata
-        Participant metadata required by :class:`~mobgap.pipeline.MobilisedPipelineHealthy`.
+        Participant metadata required by mobgap pipelines.
         Must contain ``height_m``, ``sensor_height_m``, and ``cohort``.
     recording_metadata
-        Optional recording metadata merged with CWA-derived fields.
+        Optional recording metadata merged with CWA-derived fields listed in
+        ``Notes`` below. User-supplied keys are preserved. Adapter keys are
+        added only when absent.
     sensor_position
         Sensor position label used as the key in the dataset sensor dictionary.
     include_time_index
-        If True, use a UTC Unix-time index in seconds derived from the CWA start time.
-        If False, use a :class:`~pandas.RangeIndex` (default).
+        If True, use a float Unix-time index in seconds from the processed
+        recording. If False, use a :class:`~pandas.RangeIndex` (default).
     resample_hz
-        Optional target sampling rate in Hz. When provided, sensor data is resampled
-        before constructing the dataset.
+        Optional target sampling rate in Hz. When provided, ``omcwa`` resamples
+        before constructing the dataset. When omitted, the file default rate is used.
+    calibrate
+        When True (default), run omconvert auto-calibration before resampling.
+        When False, skip calibration and use identity coefficients.
+    on_calibration_failure
+        Policy when auto-calibration fails. ``"raise"`` (default) raises
+        :class:`~omcwa.CalibrationError`. ``"identity"`` continues with
+        omconvert's identity fallback.
+    time_range
+        Optional half-open ``(start, stop)`` window in Unix seconds forwarded to
+        :func:`omcwa.process_cwa`. Calibration and resampling still process the
+        full session. The range trims the completed output.
 
     Returns
     -------
     GaitDatasetFromData
-        Dataset keyed by the recording id (filename stem).
+        Dataset with one recording, keyed by the filename stem. 
+        Sensor data are available via ``datapoint.data_ss``.
 
     Raises
     ------
     ImportError
         If the optional ``cwa`` dependency is not installed (``pip install 'mobgap[cwa]'``).
     ValueError
-        If required participant metadata keys are missing.
+        If required participant metadata keys are missing, gyroscope data is absent,
+        or processing produced no samples.
+    CalibrationError
+        If ``calibrate=True``, ``on_calibration_failure="raise"``, and omconvert
+        auto-calibration fails. See :func:`omcwa.process_cwa`.
+
+    Notes
+    -----
+    **Install:** ``pip install 'mobgap[cwa]'``
+
+    **Output units:** accelerometer columns are in m/s^2 (converted from ``omcwa``
+    g units). Gyroscope columns are in deg/s (already in physical units from
+    ``omcwa``). Column names follow :data:`~mobgap.consts.SF_SENSOR_COLS`.
+
+    **Sensor requirement:** MobGap requires accelerometer and gyroscope data.
+    Recordings without gyroscope channels (AX3 recordings) raise
+    ``ValueError``.
+
+    **Recording metadata added by this adapter** (unless already present in
+    ``recording_metadata``):
+
+    - ``cwa_source_path`` — absolute path to the source ``.cwa`` file
+    - ``cwa_start_time`` — Unix timestamp in seconds of the first processed sample
+    - ``cwa_calibration_success`` — omconvert auto-calibration success flag
+    - ``cwa_calibration_error_code`` — omconvert error code (0 on success)
+
+    For resampling algorithm details, calibration behaviour, and failure codes,
+    see the ``omcwa`` documentation.
+
+    Examples
+    --------
+    >>> from mobgap.data import load_cwa_as_dataset
+    >>> from mobgap.pipeline import MobilisedPipelineHealthy
+    >>> participant = {
+    ...     "height_m": 1.75,
+    ...     "sensor_height_m": 1.0,
+    ...     "cohort": "HA",
+    ... }
+    >>> dataset = load_cwa_as_dataset(
+    ...     "recording.cwa",
+    ...     participant,
+    ...     resample_hz=100,
+    ... )
+    >>> pipeline = MobilisedPipelineHealthy().safe_run(dataset)
 
     """
     _validate_participant_metadata(participant_metadata)
 
-    cwa_data_cls = _import_cwa_data()
+    process_cwa = _import_process_cwa()
     path = Path(path)
-    cwa_data = cwa_data_cls(
-        str(path),
-        include_time=False,
-        include_accel=True,
-        include_gyro=True,
-        include_mag=False,
-        include_light=False,
-        include_temperature=False,
+    out = process_cwa(
+        path,
+        sample_rate_hz=resample_hz if resample_hz is not None else 0.0,
+        calibrate=calibrate,
+        on_calibration_failure=on_calibration_failure,
+        time_range=time_range,
     )
 
-    sensor_df, sampling_rate_hz = _cwa_to_dataframe(cwa_data, include_time_index=include_time_index)
+    if len(out.time) == 0:
+        raise ValueError("CWA recording produced no samples after processing.")
 
-    if resample_hz is not None:
-        resampler = Resample(target_sampling_rate_hz=resample_hz, attempt_index_resample=include_time_index)
-        sensor_df = resampler.transform(sensor_df, sampling_rate_hz=sampling_rate_hz).transformed_data_
-        sampling_rate_hz = resample_hz
+    sensor_df, sampling_rate_hz = _recording_to_dataframe(out, include_time_index=include_time_index)
 
     recording_id = path.stem
     recording_meta = dict(recording_metadata or {})
     recording_meta.setdefault("cwa_source_path", str(path.resolve()))
-    recording_meta.setdefault("cwa_start_time", cwa_data.get_start_time())
+    recording_meta.setdefault("cwa_start_time", float(out.time[0]))
+
+    recording_meta.setdefault("cwa_calibration_success", out.calibration.success)
+    recording_meta.setdefault("cwa_calibration_error_code", out.calibration.error_code)
 
     return GaitDatasetFromData(
         {recording_id: {sensor_position: sensor_df}},
