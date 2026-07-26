@@ -38,7 +38,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-cwa = [
+uos = [
     "omcwa; python_version >= '3.11'",
 ]
 
