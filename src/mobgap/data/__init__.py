@@ -22,12 +22,6 @@ from mobgap.data._mobilised_matlab_loader import (
 from mobgap.data._mobilised_tvs_dataset import BaseTVSDataset, TVSFreeLivingDataset, TVSLabDataset
 from mobgap.data._mobilsed_weartime_loader import load_weartime_from_daily_mcroberts_report
 from mobgap.data._ms_project import MsProjectDataset
-from mobgap.data._openmovement_cwa import load_cwa_as_dataset
-from mobgap.data._participant_metadata import (
-    convert_mobilised_info_to_participant_metadata,
-    load_participant_metadata,
-    normalize_participant_metadata,
-)
 
 __all__ = [
     "BaseGenericMobilisedDataset",
@@ -45,13 +39,9 @@ __all__ = [
     "get_all_lab_example_data_paths",
     "get_example_csv_data_path",
     "get_example_cvs_dmo_data_path",
-    "convert_mobilised_info_to_participant_metadata",
-    "load_cwa_as_dataset",
     "load_mobilised_matlab_format",
     "load_mobilised_participant_metadata_file",
-    "load_participant_metadata",
     "load_weartime_from_daily_mcroberts_report",
     "matlab_dataset_docfiller",
-    "normalize_participant_metadata",
     "parse_reference_parameters",
 ]

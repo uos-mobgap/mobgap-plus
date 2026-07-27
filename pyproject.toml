@@ -43,7 +43,7 @@ uos = [
 ]
 
 [tool.uv.sources]
-omcwa = { git = "ssh://git@github.com/uos-mobgap/omcwa" }
+omcwa = { git = "https://github.com/uos-mobgap/omcwa" }
 
 [dependency-groups]
 dev = [

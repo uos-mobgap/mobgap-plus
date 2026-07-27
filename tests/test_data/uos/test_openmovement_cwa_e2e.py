@@ -10,14 +10,14 @@ import pytest
 pytest.importorskip("omcwa")
 
 from mobgap.consts import SF_SENSOR_COLS
-from mobgap.data import load_cwa_as_dataset
+from mobgap.data.uos import load_cwa_as_dataset
 
 pytestmark = pytest.mark.skipif(
     sys.version_info < (3, 11),
     reason="omcwa requires Python 3.11+",
 )
 
-_FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "cwa"
+_FIXTURE_DIR = Path(__file__).resolve().parents[2] / "fixtures" / "uos" / "cwa"
 _CAL_SUCCESS = _FIXTURE_DIR / "cal_success.cwa"
 _PARTICIPANT_METADATA = {
     "height_m": 1.75,

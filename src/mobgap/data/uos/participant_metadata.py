@@ -1,5 +1,7 @@
 """Load and normalise participant metadata for MobGap pipelines.
 
+UoS-MobGap extension (optional: ``mobgap[uos]``). Not part of upstream MobGap.
+
 Accepts already-normalised MobGap dicts, Mobilise-D ``infoForAlgo`` raw fields,
 CSV / DataFrame / Series tables, or paths to ``.mat`` / ``.csv`` sidecars.
 All paths produce the same :class:`mobgap.data.base.ParticipantMetadata` shape
@@ -11,7 +13,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Union
 
 import pandas as pd
 
@@ -24,7 +26,7 @@ ParticipantMetadataSource = Union[str, Path, Mapping[str, Any], pd.Series, pd.Da
 def convert_mobilised_info_to_participant_metadata(
     meta_data: Mapping[str, Any],
     *,
-    cohort: Optional[str] = None,
+    cohort: str | None = None,
 ) -> dict[str, Any]:
     """Convert raw Mobilise-D ``infoForAlgo`` fields to MobGap participant metadata.
 
@@ -50,11 +52,11 @@ def convert_mobilised_info_to_participant_metadata(
         )
 
     if cohort is not None:
-        cohort_value: Optional[str] = str(cohort)
+        cohort_value: str | None = str(cohort)
     elif "Cohort" in meta_data and meta_data["Cohort"] is not None:
         cohort_value = str(meta_data["Cohort"])
     else:
-        # Mobilise-D dataset loaders often take cohort from the index instead.
+        # mobilised-d dataset loaders often take cohort from the index instead
         cohort_value = None
 
     walking_aid_raw = meta_data.get("WalkingAid_01", -1)
@@ -93,7 +95,7 @@ def normalize_participant_metadata(raw: Mapping[str, Any]) -> dict[str, Any]:
     has_mobgap = {"height_m", "sensor_height_m", "cohort"} <= keys
     has_mobilised = {"Height", "SensorHeight", "Cohort"} <= keys
 
-    # Prefer MobGap schema when present so mixed tables do not double-convert.
+    # prefer mobgap schema when present so mixed tables do not double-convert
     if has_mobgap:
         if has_mobilised:
             warnings.warn(
@@ -125,7 +127,7 @@ def normalize_participant_metadata(raw: Mapping[str, Any]) -> dict[str, Any]:
     )
 
 
-def _mapping_from_table(table: Union[pd.Series, pd.DataFrame]) -> dict[str, Any]:
+def _mapping_from_table(table: pd.Series | pd.DataFrame) -> dict[str, Any]:
     """Convert a pandas Series or DataFrame to a mapping."""
     if isinstance(table, pd.Series):
         return table.to_dict()
@@ -136,15 +138,14 @@ def _mapping_from_table(table: Union[pd.Series, pd.DataFrame]) -> dict[str, Any]
     return table.iloc[0].to_dict()
 
 
-def _load_from_path(path: Path, *, time_measure: Optional[str]) -> dict[str, Any]:
+def _load_from_path(path: Path, *, time_measure: str | None) -> dict[str, Any]:
     """Load participant metadata from a Mobilise-D ``infoForAlgo.mat`` or a ``.csv`` file."""
     if not path.is_file():
         raise FileNotFoundError(f"Participant metadata file not found: {path}")
 
     suffix = path.suffix.lower()
     if suffix == ".mat":
-        # Lazy import avoids a cycle with `_mobilised_matlab_loader`.
-        from mobgap.data._mobilised_matlab_loader import (
+        from mobgap.data._mobilised_matlab_loader import (  # noqa: PLC0415
             load_mobilised_participant_metadata_file,
         )
 
@@ -155,10 +156,7 @@ def _load_from_path(path: Path, *, time_measure: Optional[str]) -> dict[str, Any
         if time_measure is None:
             selected = next(iter(raw.values()))
         elif time_measure not in raw:
-            raise KeyError(
-                f"time_measure {time_measure!r} not found in {path}. "
-                f"Available: {sorted(raw)}"
-            )
+            raise KeyError(f"time_measure {time_measure!r} not found in {path}. Available: {sorted(raw)}")
         else:
             selected = raw[time_measure]
 
@@ -176,7 +174,7 @@ def _load_from_path(path: Path, *, time_measure: Optional[str]) -> dict[str, Any
 def load_participant_metadata(
     source: ParticipantMetadataSource,
     *,
-    time_measure: Optional[str] = None,
+    time_measure: str | None = None,
 ) -> dict[str, Any]:
     """Load participant metadata from a path, table, or mapping.
 
@@ -199,7 +197,7 @@ def load_participant_metadata(
     -------
     dict
         Normalised participant metadata suitable for MobGap pipelines and
-        :func:`mobgap.data.load_cwa_as_dataset`
+        :func:`mobgap.data.uos.load_cwa_as_dataset`.
     """
     if isinstance(source, (str, Path)):
         return _load_from_path(Path(source).expanduser(), time_measure=time_measure)

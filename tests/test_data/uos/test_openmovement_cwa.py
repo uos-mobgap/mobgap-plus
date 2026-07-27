@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from mobgap.consts import GRAV_MS2, SF_SENSOR_COLS
-from mobgap.data._openmovement_cwa import _recording_to_dataframe, load_cwa_as_dataset
+from mobgap.data.uos.openmovement_cwa import _recording_to_dataframe, load_cwa_as_dataset
 
 _PARTICIPANT_METADATA = {"height_m": 1.75, "sensor_height_m": 1.0, "cohort": "HA"}
 
@@ -25,9 +25,7 @@ class _StubProcessedRecording:
         self.sample_rate_hz = 100.0
         self.time = np.array([1_700_000_000.0, 1_700_000_000.01])
         self.acc = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
-        self.gyr = (
-            np.array([[10.0, 20.0, 30.0], [11.0, 21.0, 31.0]]) if has_gyro else None
-        )
+        self.gyr = np.array([[10.0, 20.0, 30.0], [11.0, 21.0, 31.0]]) if has_gyro else None
         self.calibration = MagicMock(
             success=calibration_success,
             error_code=calibration_error_code,
@@ -36,9 +34,7 @@ class _StubProcessedRecording:
 
 class TestRecordingToDataframe:
     def test_column_names_and_units(self):
-        df, sampling_rate_hz = _recording_to_dataframe(
-            _StubProcessedRecording(), include_time_index=False
-        )
+        df, sampling_rate_hz = _recording_to_dataframe(_StubProcessedRecording(), include_time_index=False)
 
         assert list(df.columns) == SF_SENSOR_COLS
         assert sampling_rate_hz == 100.0
@@ -58,9 +54,7 @@ class TestRecordingToDataframe:
 
     def test_missing_gyro_raises(self):
         with pytest.raises(ValueError, match="no gyroscope data"):
-            _recording_to_dataframe(
-                _StubProcessedRecording(has_gyro=False), include_time_index=False
-            )
+            _recording_to_dataframe(_StubProcessedRecording(has_gyro=False), include_time_index=False)
 
 
 class TestLoadCwaAsDataset:
@@ -75,7 +69,7 @@ class TestLoadCwaAsDataset:
         with pytest.raises(FileNotFoundError, match="CWA file not found"):
             load_cwa_as_dataset(tmp_path / "missing.cwa", _PARTICIPANT_METADATA)
 
-    @patch("mobgap.data._openmovement_cwa._import_process_cwa")
+    @patch("mobgap.data.uos.openmovement_cwa._import_process_cwa")
     def test_builds_dataset_and_forwards_resample(self, mock_import_process_cwa, tmp_path):
         mock_process_cwa = MagicMock(
             return_value=_StubProcessedRecording(

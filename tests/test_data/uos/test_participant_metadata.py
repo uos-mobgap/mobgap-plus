@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from mobgap.data import (
+from mobgap.data.uos import (
     convert_mobilised_info_to_participant_metadata,
     load_participant_metadata,
     normalize_participant_metadata,
@@ -82,9 +82,7 @@ class TestLoadParticipantMetadata:
     def test_from_csv_mobilised_schema(self, tmp_path: Path):
         csv_path = tmp_path / "meta.csv"
         pd.DataFrame([_MOBILISED]).to_csv(csv_path, index=False)
-        assert load_participant_metadata(csv_path) == convert_mobilised_info_to_participant_metadata(
-            _MOBILISED
-        )
+        assert load_participant_metadata(csv_path) == convert_mobilised_info_to_participant_metadata(_MOBILISED)
 
     def test_missing_file_raises(self, tmp_path: Path):
         with pytest.raises(FileNotFoundError, match="not found"):

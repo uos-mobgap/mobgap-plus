@@ -1,5 +1,6 @@
 """Load Open Movement CWA files into MobGap datasets.
 
+UoS-MobGap extension (optional: ``mobgap[uos]``). Not part of upstream MobGap.
 Requires the optional ``mobgap[uos]`` extra, which installs ``omcwa``.
 """
 
@@ -11,7 +12,7 @@ import pandas as pd
 
 from mobgap.consts import GRAV_MS2, SF_SENSOR_COLS
 from mobgap.data._dataset_from_data import GaitDatasetFromData
-from mobgap.data._participant_metadata import (
+from mobgap.data.uos.participant_metadata import (
     ParticipantMetadataSource,
     load_participant_metadata,
 )
@@ -24,11 +25,11 @@ CalibrationFailurePolicy = Literal["raise", "identity"]
 
 def _import_process_cwa() -> Any:
     try:
-        from omcwa import process_cwa
+        from omcwa import process_cwa  # noqa: PLC0415
     except ImportError as exc:
         raise ImportError(
             "The 'omcwa' package is required to load CWA files. "
-            "Install it with: pip install 'mobgap[uos]'"
+            "Install it with: uv sync --extra uos  (or pip install 'mobgap[uos]')"
         ) from exc
     return process_cwa
 
@@ -79,12 +80,12 @@ def load_cwa_as_dataset(
     time_range: Optional[tuple[float, float]] = None,
     metadata_time_measure: Optional[str] = None,
 ) -> GaitDatasetFromData:
-    """Load a CWA file into a :class:`mobgap.data.GaitDatasetFromData`.
+    """Load a CWA file into a :class:`~mobgap.data.GaitDatasetFromData`.
 
     This is a thin adapter over :func:`omcwa.process_cwa`. Decoding,
     auto-calibration, and resampling are handled by ``omcwa``. This function
     converts the result into MobGap column names/units and wraps it in a
-    :class:`mobgap.data.GaitDatasetFromData` ready for mobgap pipelines.
+    :class:`~mobgap.data.GaitDatasetFromData` ready for mobgap pipelines.
 
     Parameters
     ----------
@@ -99,7 +100,7 @@ def load_cwa_as_dataset(
         - :class:`pandas.Series` / :class:`pandas.DataFrame` (first row)
         - path to a Mobilise-D ``infoForAlgo.mat`` or a ``.csv`` with either schema
 
-        All forms are normalised by :func:`mobgap.data.load_participant_metadata`.
+        All forms are normalised by :func:`~mobgap.data.uos.load_participant_metadata`.
     recording_metadata
         Optional recording metadata merged with CWA-derived fields listed in
         ``Notes`` below. User-supplied keys are preserved. Adapter keys are
@@ -108,7 +109,7 @@ def load_cwa_as_dataset(
         Sensor position label used as the key in the dataset sensor dictionary.
     include_time_index
         If True, use a float Unix-time index in seconds from the processed
-        recording. If False, use a :class:`pandas.RangeIndex` (default).
+        recording. If False, use a :class:`~pandas.RangeIndex` (default).
     resample_hz
         Optional target sampling rate in Hz. When provided, ``omcwa`` resamples
         before constructing the dataset. When omitted, the file default rate is used.
@@ -117,7 +118,7 @@ def load_cwa_as_dataset(
         When False, skip calibration and use identity coefficients.
     on_calibration_failure
         Policy when auto-calibration fails. ``"raise"`` (default) raises
-        :class:`omcwa.CalibrationError`. ``"identity"`` continues with
+        :class:`~omcwa.CalibrationError`. ``"identity"`` continues with
         omconvert's identity fallback.
     time_range
         Optional half-open ``(start, stop)`` window in Unix seconds forwarded to
@@ -136,7 +137,7 @@ def load_cwa_as_dataset(
     Raises
     ------
     ImportError
-        If the optional ``uos`` dependency is not installed (``pip install 'mobgap[uos]'``).
+        If the optional ``uos`` dependency is not installed (``uv sync --extra uos`` or ``pip install 'mobgap[uos]'``).
     FileNotFoundError
         If the ``.cwa`` path or a metadata file path does not exist.
     ValueError
@@ -148,11 +149,15 @@ def load_cwa_as_dataset(
 
     Notes
     -----
-    Install: ``pip install 'mobgap[uos]'``
+    Install (recommended: uv — https://docs.astral.sh/uv/):
+
+        ``uv sync --extra uos``
+
+    Or: ``pip install 'mobgap[uos]'``
 
     Output units: accelerometer columns are in m/s^2 (converted from ``omcwa``
     g units). Gyroscope columns are in deg/s (already in physical units from
-    ``omcwa``). Column names follow :data:`mobgap.consts.SF_SENSOR_COLS`.
+    ``omcwa``). Column names follow :data:`~mobgap.consts.SF_SENSOR_COLS`.
 
     Sensor requirement: MobGap requires accelerometer and gyroscope data.
     Recordings without gyroscope channels (AX3 recordings) raise
@@ -171,7 +176,7 @@ def load_cwa_as_dataset(
 
     Examples
     --------
-    >>> from mobgap.data import load_cwa_as_dataset
+    >>> from mobgap.data.uos import load_cwa_as_dataset
     >>> from mobgap.pipeline import MobilisedPipelineHealthy
     >>> participant = {
     ...     "height_m": 1.75,
