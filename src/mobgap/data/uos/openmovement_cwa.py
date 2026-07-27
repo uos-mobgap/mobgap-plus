@@ -1,7 +1,7 @@
 """Load Open Movement CWA files into MobGap datasets.
 
-UoS-MobGap extension (optional: ``mobgap[uos]``). Not part of upstream MobGap.
-Requires the optional ``mobgap[uos]`` extra, which installs ``omcwa``.
+UoS-MobGap extension. Not part of upstream MobGap.
+Requires ``omcwa`` package, which is installed by ``mobgap[uos]`` extra.
 """
 
 from pathlib import Path
@@ -32,6 +32,32 @@ def _import_process_cwa() -> Any:
             "Install it with: uv sync --extra uos  (or pip install 'mobgap[uos]')"
         ) from exc
     return process_cwa
+
+
+def _drop_invalid_samples(out: "ProcessedRecording") -> tuple["ProcessedRecording", int]:
+    """Return a copy of ``out`` with omconvert-invalid samples removed."""
+    invalid_count = int((~out.valid).sum())
+    if invalid_count == 0:
+        return out, 0
+
+    if not np.any(out.valid):
+        raise ValueError("CWA recording has no valid samples after processing.")
+
+    mask = out.valid
+    from omcwa.types import ProcessedRecording  # noqa: PLC0415
+
+    gyr = None if out.gyr is None else out.gyr[mask]
+    filtered = ProcessedRecording(
+        sample_rate_hz=out.sample_rate_hz,
+        time=out.time[mask],
+        acc=out.acc[mask],
+        gyr=gyr,
+        calibration=out.calibration,
+        metadata=out.metadata,
+        valid=out.valid[mask],
+        clipped=out.clipped[mask],
+    )
+    return filtered, invalid_count
 
 
 def _recording_to_dataframe(
@@ -77,15 +103,16 @@ def load_cwa_as_dataset(
     resample_hz: Optional[float] = None,
     calibrate: bool = True,
     on_calibration_failure: CalibrationFailurePolicy = "raise",
+    drop_invalid: bool = True,
     time_range: Optional[tuple[float, float]] = None,
     metadata_time_measure: Optional[str] = None,
 ) -> GaitDatasetFromData:
-    """Load a CWA file into a :class:`~mobgap.data.GaitDatasetFromData`.
+    """Load a CWA file into a :class:`mobgap.data.GaitDatasetFromData`.
 
     This is a thin adapter over :func:`omcwa.process_cwa`. Decoding,
     auto-calibration, and resampling are handled by ``omcwa``. This function
     converts the result into MobGap column names/units and wraps it in a
-    :class:`~mobgap.data.GaitDatasetFromData` ready for mobgap pipelines.
+    :class:`mobgap.data.GaitDatasetFromData` ready for mobgap pipelines.
 
     Parameters
     ----------
@@ -100,7 +127,7 @@ def load_cwa_as_dataset(
         - :class:`pandas.Series` / :class:`pandas.DataFrame` (first row)
         - path to a Mobilise-D ``infoForAlgo.mat`` or a ``.csv`` with either schema
 
-        All forms are normalised by :func:`~mobgap.data.uos.load_participant_metadata`.
+        All forms are normalised by :func:`mobgap.data.uos.load_participant_metadata`.
     recording_metadata
         Optional recording metadata merged with CWA-derived fields listed in
         ``Notes`` below. User-supplied keys are preserved. Adapter keys are
@@ -109,7 +136,7 @@ def load_cwa_as_dataset(
         Sensor position label used as the key in the dataset sensor dictionary.
     include_time_index
         If True, use a float Unix-time index in seconds from the processed
-        recording. If False, use a :class:`~pandas.RangeIndex` (default).
+        recording. If False, use a :class:`pandas.RangeIndex` (default).
     resample_hz
         Optional target sampling rate in Hz. When provided, ``omcwa`` resamples
         before constructing the dataset. When omitted, the file default rate is used.
@@ -118,8 +145,14 @@ def load_cwa_as_dataset(
         When False, skip calibration and use identity coefficients.
     on_calibration_failure
         Policy when auto-calibration fails. ``"raise"`` (default) raises
-        :class:`~omcwa.CalibrationError`. ``"identity"`` continues with
+        :class:`omcwa.CalibrationError`. ``"identity"`` continues with
         omconvert's identity fallback.
+    drop_invalid
+        When True (default), remove resampled samples that omconvert marks as
+        invalid (``ProcessedRecording.valid`` is False). This matches
+        omconvert/OmGUI analytics, which skip invalid gaps rather than using
+        them in summaries. Set to False to keep the full uniform timeline,
+        including startup gaps and other periods without sensor data.
     time_range
         Optional half-open ``(start, stop)`` window in Unix seconds forwarded to
         :func:`omcwa.process_cwa`. Calibration and resampling still process the
@@ -155,9 +188,8 @@ def load_cwa_as_dataset(
 
     Or: ``pip install 'mobgap[uos]'``
 
-    Output units: accelerometer columns are in m/s^2 (converted from ``omcwa``
-    g units). Gyroscope columns are in deg/s (already in physical units from
-    ``omcwa``). Column names follow :data:`~mobgap.consts.SF_SENSOR_COLS`.
+    Output units: accelerometer columns are in m/s^2, gyroscope columns are 
+    in deg/s. Column names follow :data:`mobgap.consts.SF_SENSOR_COLS`.
 
     Sensor requirement: MobGap requires accelerometer and gyroscope data.
     Recordings without gyroscope channels (AX3 recordings) raise
@@ -170,6 +202,9 @@ def load_cwa_as_dataset(
     - ``cwa_start_time`` — Unix timestamp in seconds of the first processed sample
     - ``cwa_calibration_success`` — omconvert auto-calibration success flag
     - ``cwa_calibration_error_code`` — omconvert error code (0 on success)
+    - ``cwa_invalid_samples`` — count of invalid samples before optional dropping
+    - ``cwa_invalid_samples_dropped`` — invalid samples removed when
+      ``drop_invalid=True`` (0 when ``drop_invalid=False``)
 
     For resampling algorithm details, calibration behaviour, and failure codes,
     see the ``omcwa`` documentation.
@@ -212,12 +247,20 @@ def load_cwa_as_dataset(
     if len(out.time) == 0:
         raise ValueError("CWA recording produced no samples after processing.")
 
+    invalid_count = int((~out.valid).sum())
+    if drop_invalid:
+        out, dropped_invalid = _drop_invalid_samples(out)
+    else:
+        dropped_invalid = 0
+
     sensor_df, sampling_rate_hz = _recording_to_dataframe(out, include_time_index=include_time_index)
 
     recording_id = path.stem
     recording_meta = dict(recording_metadata or {})
     recording_meta.setdefault("cwa_source_path", str(path.resolve()))
     recording_meta.setdefault("cwa_start_time", float(out.time[0]))
+    recording_meta.setdefault("cwa_invalid_samples", invalid_count)
+    recording_meta.setdefault("cwa_invalid_samples_dropped", dropped_invalid)
 
     recording_meta.setdefault("cwa_calibration_success", out.calibration.success)
     recording_meta.setdefault("cwa_calibration_error_code", out.calibration.error_code)

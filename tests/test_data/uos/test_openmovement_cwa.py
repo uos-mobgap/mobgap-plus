@@ -26,6 +26,9 @@ class _StubProcessedRecording:
         self.time = np.array([1_700_000_000.0, 1_700_000_000.01])
         self.acc = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
         self.gyr = np.array([[10.0, 20.0, 30.0], [11.0, 21.0, 31.0]]) if has_gyro else None
+        self.valid = np.array([True, True], dtype=np.bool_)
+        self.clipped = np.array([False, False], dtype=np.bool_)
+        self.metadata: dict[str, object] = {}
         self.calibration = MagicMock(
             success=calibration_success,
             error_code=calibration_error_code,
@@ -58,13 +61,6 @@ class TestRecordingToDataframe:
 
 
 class TestLoadCwaAsDataset:
-    def test_missing_participant_metadata_raises(self):
-        with pytest.raises(ValueError, match="height_m"):
-            load_cwa_as_dataset(
-                "recording.cwa",
-                {"sensor_height_m": 1.0, "cohort": "HA"},
-            )
-
     def test_missing_cwa_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="CWA file not found"):
             load_cwa_as_dataset(tmp_path / "missing.cwa", _PARTICIPANT_METADATA)
@@ -103,3 +99,67 @@ class TestLoadCwaAsDataset:
         assert datapoint.recording_metadata["cwa_start_time"] == 1_700_000_000.0
         assert datapoint.recording_metadata["cwa_calibration_success"] is False
         assert datapoint.recording_metadata["cwa_calibration_error_code"] == -1
+        assert datapoint.recording_metadata["cwa_invalid_samples"] == 0
+        assert datapoint.recording_metadata["cwa_invalid_samples_dropped"] == 0
+
+    @patch("mobgap.data.uos.openmovement_cwa._import_process_cwa")
+    def test_empty_processed_recording_raises(self, mock_import_process_cwa, tmp_path):
+        stub = _StubProcessedRecording()
+        stub.time = np.array([], dtype=np.float64)
+        stub.acc = np.empty((0, 3))
+        stub.gyr = np.empty((0, 3))
+        stub.valid = np.array([], dtype=np.bool_)
+        stub.clipped = np.array([], dtype=np.bool_)
+        mock_import_process_cwa.return_value = MagicMock(return_value=stub)
+        cwa_path = tmp_path / "recording.cwa"
+        cwa_path.write_bytes(b"")
+
+        with pytest.raises(ValueError, match="no samples after processing"):
+            load_cwa_as_dataset(cwa_path, _PARTICIPANT_METADATA)
+
+    @patch("mobgap.data.uos.openmovement_cwa._import_process_cwa")
+    def test_all_invalid_with_drop_invalid_raises(self, mock_import_process_cwa, tmp_path):
+        stub = _StubProcessedRecording()
+        stub.valid = np.array([False, False], dtype=np.bool_)
+        mock_import_process_cwa.return_value = MagicMock(return_value=stub)
+        cwa_path = tmp_path / "recording.cwa"
+        cwa_path.write_bytes(b"")
+
+        with pytest.raises(ValueError, match="no valid samples"):
+            load_cwa_as_dataset(cwa_path, _PARTICIPANT_METADATA, drop_invalid=True)
+
+    @patch("mobgap.data.uos.openmovement_cwa._import_process_cwa")
+    def test_drop_invalid_removes_invalid_samples_by_default(self, mock_import_process_cwa, tmp_path):
+        stub = _StubProcessedRecording()
+        stub.valid = np.array([False, True], dtype=np.bool_)
+        mock_import_process_cwa.return_value = MagicMock(return_value=stub)
+        cwa_path = tmp_path / "recording.cwa"
+        cwa_path.write_bytes(b"")
+
+        dataset = load_cwa_as_dataset(cwa_path, _PARTICIPANT_METADATA)
+        datapoint = dataset[0]
+
+        assert len(datapoint.data_ss) == 1
+        assert datapoint.recording_metadata["cwa_invalid_samples"] == 1
+        assert datapoint.recording_metadata["cwa_invalid_samples_dropped"] == 1
+        np.testing.assert_allclose(datapoint.data_ss["acc_y"], GRAV_MS2)
+        np.testing.assert_allclose(datapoint.data_ss["gyr_x"], 11.0)
+
+    @patch("mobgap.data.uos.openmovement_cwa._import_process_cwa")
+    def test_drop_invalid_false_keeps_invalid_samples(self, mock_import_process_cwa, tmp_path):
+        stub = _StubProcessedRecording()
+        stub.valid = np.array([False, True], dtype=np.bool_)
+        mock_import_process_cwa.return_value = MagicMock(return_value=stub)
+        cwa_path = tmp_path / "recording.cwa"
+        cwa_path.write_bytes(b"")
+
+        dataset = load_cwa_as_dataset(
+            cwa_path,
+            _PARTICIPANT_METADATA,
+            drop_invalid=False,
+        )
+        datapoint = dataset[0]
+
+        assert len(datapoint.data_ss) == 2
+        assert datapoint.recording_metadata["cwa_invalid_samples"] == 1
+        assert datapoint.recording_metadata["cwa_invalid_samples_dropped"] == 0

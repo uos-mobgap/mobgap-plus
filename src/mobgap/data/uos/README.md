@@ -27,8 +27,14 @@ dataset = load_cwa_as_dataset(
     {"height_m": 1.75, "sensor_height_m": 1.0, "cohort": "HA"},
     recording_metadata={"measurement_condition": "laboratory"},
     resample_hz=100.0,
+    drop_invalid=True,
 )
 pipeline = MobilisedPipelineHealthy().safe_run(dataset)
 ```
+
+By default, `load_cwa_as_dataset` drops omconvert-invalid resampled samples
+(`drop_invalid=True`). Recording metadata includes `cwa_invalid_samples` and
+`cwa_invalid_samples_dropped`. Set `drop_invalid=False` to keep the full
+uniform timeline (including startup gaps).
 
 See the [Mobilise-D CWA walkthrough](https://github.com/uos-mobgap/mobilise-d_mobgap_tutorial) for a full notebook.
