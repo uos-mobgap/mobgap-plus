@@ -89,6 +89,14 @@ class TestOutputShape:
         assert aggregated.loc[empty_hour, "total_walking_duration_min"] == 0
         assert pd.isna(aggregated.loc[empty_hour, "wb_all__cadence_spm__avg"])
 
+    def test_a_recording_without_walking_bouts_still_reports_its_bins(self):
+        result = MultiGranularAggregator().aggregate(_wb_dmos([], []), timeline=_timeline())
+
+        aggregated = result.aggregated_data_
+        assert aggregated.groupby("time_bin").size().to_dict() == {"hour": 48, "day": 2, "week": 1}
+        assert (aggregated["wb_all__count"] == 0).all()
+        assert aggregated["wb_all__cadence_spm__avg"].isna().all()
+
     def test_drop_partial_keeps_only_fully_covered_bins(self):
         # the recording starts at 12:00 and runs for 24 hours, so no day is fully covered
         timeline = RecordingTimeline.from_uniform(

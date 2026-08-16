@@ -2,7 +2,6 @@
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from mobgap.aggregation.uos import (
     RecordingTimeline,
@@ -18,6 +17,22 @@ _START = pd.Timestamp("2024-03-06 14:30:00").timestamp()
 
 def _timeline(hours: float = 24.0, sampling_rate_hz: float = 10.0) -> RecordingTimeline:
     return RecordingTimeline.from_uniform(_START, int(hours * 3600 * sampling_rate_hz), sampling_rate_hz)
+
+
+def _dataset(index: pd.Index, recording_metadata: dict) -> GaitDatasetFromData:
+    data = pd.DataFrame(
+        np.zeros((len(index), 6)),
+        columns=["acc_x", "acc_y", "acc_z", "gyr_x", "gyr_y", "gyr_z"],
+        index=index,
+    )
+    return GaitDatasetFromData(
+        {"rec": {"LowerBack": data}},
+        10.0,
+        _participant_metadata={"rec": {"height_m": 1.7, "sensor_height_m": 1.0, "cohort": "HA"}},
+        _recording_metadata={"rec": recording_metadata},
+        single_sensor_name="LowerBack",
+        index_cols="recording_id",
+    )
 
 
 class TestRecordingTimeline:
@@ -51,20 +66,23 @@ class TestRecordingTimeline:
         assert timeline.end == pd.Timestamp("2024-03-31 03:59:00")
 
     def test_from_datapoint_reads_the_recording_metadata(self):
-        data = pd.DataFrame(np.zeros((100, 6)), columns=["acc_x", "acc_y", "acc_z", "gyr_x", "gyr_y", "gyr_z"])
-        dataset = GaitDatasetFromData(
-            {"rec": {"LowerBack": data}},
-            10.0,
-            _participant_metadata={"rec": {"height_m": 1.7, "sensor_height_m": 1.0, "cohort": "HA"}},
-            _recording_metadata={"rec": {"cwa_start_time": _START, "timezone": None}},
-            single_sensor_name="LowerBack",
-            index_cols="recording_id",
-        )
+        dataset = _dataset(pd.RangeIndex(100, name="samples"), {"cwa_start_time": _START, "timezone": None})
 
         timeline = RecordingTimeline.from_datapoint(dataset[0])
 
         assert timeline.start == pd.Timestamp("2024-03-06 14:30:00")
         assert timeline.end == pd.Timestamp("2024-03-06 14:30:10")
+
+    def test_from_datapoint_prefers_the_time_index(self):
+        # a time-indexed dataset carries the true sample times, gaps included
+        sample_times = np.concatenate([_START + np.arange(10), _START + 3600 + np.arange(10)])
+        dataset = _dataset(pd.Index(sample_times, name="time"), {"cwa_start_time": _START + 999})
+
+        timeline = RecordingTimeline.from_datapoint(dataset[0])
+
+        # the metadata start time is deliberately wrong, so only the index can give this answer
+        assert timeline.start == pd.Timestamp("2024-03-06 14:30:00")
+        assert timeline.timestamps(np.array([10]))[0] == pd.Timestamp("2024-03-06 15:30:00")
 
 
 class TestAddTimeBins:
@@ -115,3 +133,16 @@ class TestTimeBinGrid:
         # the recording starts at 14:30 and ends at 14:30, so neither day is complete
         assert not is_complete_bin(grid, timeline, "day").any()
         assert is_complete_bin(time_bin_grid(timeline, "hour"), timeline, "hour").sum() == 23
+
+    def test_a_complete_week_needs_all_seven_days(self):
+        # three days starting on a Monday complete no week, however well they line up with its start
+        short = RecordingTimeline.from_uniform(pd.Timestamp("2024-03-04 00:00:00").timestamp(), 3 * 864000, 10.0)
+
+        assert not is_complete_bin(time_bin_grid(short, "week"), short, "week").any()
+
+        # Sunday noon plus eight days touches three ISO weeks and covers exactly the middle one
+        full = RecordingTimeline.from_uniform(pd.Timestamp("2024-03-03 12:00:00").timestamp(), 8 * 864000, 10.0)
+        grid = time_bin_grid(full, "week")
+
+        assert len(grid) == 3
+        assert list(grid[is_complete_bin(grid, full, "week")]) == [pd.Timestamp("2024-03-04")]
