@@ -4,6 +4,7 @@ UoS-MobGap extension. Not part of upstream MobGap.
 Requires ``omcwa`` package, which is installed by ``mobgap[uos]`` extra.
 """
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
@@ -23,6 +24,22 @@ if TYPE_CHECKING:
 CalibrationFailurePolicy = Literal["raise", "identity"]
 
 
+@dataclass(frozen=True)
+class _MaskedRecording:
+    """The subset of ``ProcessedRecording`` fields still needed once invalid samples are dropped.
+
+    ``ProcessedRecording`` is not reconstructable with a boolean-masked ``time`` array (omcwa
+    derives ``time`` from ``start_time``/``n_samples`` internally), and ``valid``/``clipped``/
+    ``metadata`` are never read again after masking, so this avoids both problems.
+    """
+
+    sample_rate_hz: float
+    time: np.ndarray
+    acc: np.ndarray
+    gyr: Optional[np.ndarray]
+    calibration: Any
+
+
 def _import_process_cwa() -> Any:
     try:
         from omcwa import process_cwa  # noqa: PLC0415
@@ -34,7 +51,7 @@ def _import_process_cwa() -> Any:
     return process_cwa
 
 
-def _drop_invalid_samples(out: "ProcessedRecording") -> tuple["ProcessedRecording", int]:
+def _drop_invalid_samples(out: "ProcessedRecording") -> tuple[Union["ProcessedRecording", _MaskedRecording], int]:
     """Return a copy of ``out`` with omconvert-invalid samples removed."""
     invalid_count = int((~out.valid).sum())
     if invalid_count == 0:
@@ -44,24 +61,18 @@ def _drop_invalid_samples(out: "ProcessedRecording") -> tuple["ProcessedRecordin
         raise ValueError("CWA recording has no valid samples after processing.")
 
     mask = out.valid
-    from omcwa.types import ProcessedRecording  # noqa: PLC0415
-
-    gyr = None if out.gyr is None else out.gyr[mask]
-    filtered = ProcessedRecording(
+    filtered = _MaskedRecording(
         sample_rate_hz=out.sample_rate_hz,
         time=out.time[mask],
         acc=out.acc[mask],
-        gyr=gyr,
+        gyr=None if out.gyr is None else out.gyr[mask],
         calibration=out.calibration,
-        metadata=out.metadata,
-        valid=out.valid[mask],
-        clipped=out.clipped[mask],
     )
     return filtered, invalid_count
 
 
 def _recording_to_dataframe(
-    out: "ProcessedRecording",
+    out: Union["ProcessedRecording", _MaskedRecording],
     *,
     include_time_index: bool,
 ) -> tuple[pd.DataFrame, float]:
