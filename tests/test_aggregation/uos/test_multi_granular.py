@@ -1,4 +1,4 @@
-"""Tests for the UoS-MobGap per-hour, per-day, and per-week DMO aggregation."""
+"""Tests for the UoS-MobGap per-hour and per-day DMO aggregation."""
 
 import numpy as np
 import pandas as pd
@@ -12,8 +12,7 @@ from mobgap.aggregation.uos import (
 )
 
 _SAMPLING_RATE_HZ = 10.0
-# Wednesday 2024-03-06, so the ISO week starts on 2024-03-04
-_START = pd.Timestamp("2024-03-06 00:00:00").timestamp()
+_START = pd.Timestamp("2026-08-17 00:00:00").timestamp()
 
 
 def _timeline(hours: float = 48.0) -> RecordingTimeline:
@@ -22,9 +21,19 @@ def _timeline(hours: float = 48.0) -> RecordingTimeline:
     )
 
 
-def _wb_dmos(offsets_h, cadence_spm, duration_s=20.0) -> pd.DataFrame:
+def _gapped_timeline(hours: float, gap_h: tuple[float, float]) -> RecordingTimeline:
+    """Build a timeline of a recording that lost every sample within ``gap_h``."""
+    times = _START + np.arange(int(hours * 3600 * _SAMPLING_RATE_HZ)) / _SAMPLING_RATE_HZ
+    lost = (times >= _START + gap_h[0] * 3600) & (times < _START + gap_h[1] * 3600)
+    return RecordingTimeline.from_sample_times(times[~lost])
+
+
+def _wb_dmos(offsets_h, cadence_spm, duration_s=20.0, timeline=None) -> pd.DataFrame:
     """Build a walking bout table with one bout at each given hour offset."""
-    starts = (np.asarray(offsets_h) * 3600 * _SAMPLING_RATE_HZ).astype(int)
+    if timeline is None or timeline.sample_times is None:
+        starts = (np.asarray(offsets_h) * 3600 * _SAMPLING_RATE_HZ).astype(int)
+    else:
+        starts = np.searchsorted(timeline.sample_times, _START + np.asarray(offsets_h) * 3600)
     return pd.DataFrame(
         {
             "start": starts,
@@ -45,7 +54,7 @@ class TestWeighting:
         )
 
         day = result.aggregated_data_.loc["day"]
-        assert day.loc[pd.Timestamp("2024-03-06"), "wb_all__cadence_spm__avg"] == pytest.approx((105.0 + 130.0) / 2)
+        assert day.loc[pd.Timestamp("2026-08-17"), "wb_all__cadence_spm__avg"] == pytest.approx((105.0 + 130.0) / 2)
 
     def test_pooled_weighting_averages_the_walking_bouts(self):
         result = MultiGranularAggregator(time_bins=("day",), weighting="pooled").aggregate(
@@ -53,7 +62,7 @@ class TestWeighting:
         )
 
         day = result.aggregated_data_.loc["day"]
-        assert day.loc[pd.Timestamp("2024-03-06"), "wb_all__cadence_spm__avg"] == pytest.approx(340.0 / 3)
+        assert day.loc[pd.Timestamp("2026-08-17"), "wb_all__cadence_spm__avg"] == pytest.approx(340.0 / 3)
 
     def test_totals_are_independent_of_the_weighting(self):
         wb_dmos = _wb_dmos(np.arange(0, 40, 0.7), np.linspace(90, 130, 58), duration_s=45.0)
@@ -81,10 +90,10 @@ class TestOutputShape:
 
         aggregated = result.aggregated_data_
         assert aggregated.index.names == ["time_bin", "bin_start"]
-        assert aggregated.groupby("time_bin").size().to_dict() == {"hour": 48, "day": 2, "week": 1}
+        assert aggregated.groupby("time_bin").size().to_dict() == {"hour": 48, "day": 2}
 
         # an hour without walking is a real zero rather than a hole in the table
-        empty_hour = ("hour", pd.Timestamp("2024-03-06 05:00:00"))
+        empty_hour = ("hour", pd.Timestamp("2026-08-17 05:00:00"))
         assert aggregated.loc[empty_hour, "wb_all__count"] == 0
         assert aggregated.loc[empty_hour, "total_walking_duration_min"] == 0
         assert pd.isna(aggregated.loc[empty_hour, "wb_all__cadence_spm__avg"])
@@ -93,26 +102,51 @@ class TestOutputShape:
         result = MultiGranularAggregator().aggregate(_wb_dmos([], []), timeline=_timeline())
 
         aggregated = result.aggregated_data_
-        assert aggregated.groupby("time_bin").size().to_dict() == {"hour": 48, "day": 2, "week": 1}
+        assert aggregated.groupby("time_bin").size().to_dict() == {"hour": 48, "day": 2}
         assert (aggregated["wb_all__count"] == 0).all()
         assert aggregated["wb_all__cadence_spm__avg"].isna().all()
 
-    def test_drop_partial_keeps_only_fully_covered_bins(self):
+    def test_day_start_hour_moves_the_reported_days(self):
+        # a bout half an hour after midnight belongs to the previous day when the day starts at 04:00
+        wb_dmos = _wb_dmos([0.5, 24.5], [100.0, 120.0])
+
+        result = MultiGranularAggregator(time_bins=("day",), day_start_hour=4).aggregate(wb_dmos, timeline=_timeline())
+
+        days = result.aggregated_data_.loc["day"]
+        assert list(days.index) == [
+            pd.Timestamp("2026-08-16 04:00:00"),
+            pd.Timestamp("2026-08-17 04:00:00"),
+            pd.Timestamp("2026-08-18 04:00:00"),
+        ]
+        assert days["wb_all__count"].to_list() == [1, 1, 0]
+
+
+class TestCoverage:
+    def test_min_coverage_keeps_only_sufficiently_covered_bins(self):
         # the recording starts at 12:00 and runs for 24 hours, so no day is fully covered
         timeline = RecordingTimeline.from_uniform(
-            pd.Timestamp("2024-03-06 12:00:00").timestamp(), int(24 * 3600 * _SAMPLING_RATE_HZ), _SAMPLING_RATE_HZ
+            pd.Timestamp("2026-08-17 12:00:00").timestamp(), int(24 * 3600 * _SAMPLING_RATE_HZ), _SAMPLING_RATE_HZ
         )
         wb_dmos = _wb_dmos([0.5, 13.0], [100.0, 110.0])
 
-        kept = MultiGranularAggregator(time_bins=("hour", "day"), drop_partial=True).aggregate(
-            wb_dmos, timeline=timeline
-        )
-        dropped = MultiGranularAggregator(time_bins=("hour", "day"), drop_partial=False).aggregate(
-            wb_dmos, timeline=timeline
-        )
+        strict = MultiGranularAggregator(min_coverage=1.0).aggregate(wb_dmos, timeline=timeline)
+        lenient = MultiGranularAggregator(min_coverage=0.0).aggregate(wb_dmos, timeline=timeline)
 
-        assert kept.aggregated_data_.groupby("time_bin").size().to_dict() == {"hour": 24}
-        assert dropped.aggregated_data_.groupby("time_bin").size().to_dict() == {"hour": 24, "day": 2}
+        assert strict.aggregated_data_.groupby("time_bin").size().to_dict() == {"hour": 24}
+        assert lenient.aggregated_data_.groupby("time_bin").size().to_dict() == {"hour": 24, "day": 2}
+        assert lenient.aggregated_data_.loc["day", "coverage"].to_list() == [0.5, 0.5]
+
+    def test_a_dropped_hour_still_counts_towards_its_day(self):
+        # half of hour 3 is lost, and a walking bout sits in the half that survived
+        timeline = _gapped_timeline(hours=48.0, gap_h=(3.5, 4.0))
+        wb_dmos = _wb_dmos([1.0, 3.2], [100.0, 120.0], timeline=timeline)
+
+        result = MultiGranularAggregator(min_coverage=0.9).aggregate(wb_dmos, timeline=timeline)
+
+        aggregated = result.aggregated_data_
+        assert pd.Timestamp("2026-08-17 03:00:00") not in aggregated.loc["hour"].index
+        assert aggregated.loc[("day", pd.Timestamp("2026-08-17")), "wb_all__count"] == 2
+        assert aggregated.loc[("day", pd.Timestamp("2026-08-17")), "coverage"] == pytest.approx(1 - 0.5 / 24)
 
 
 class TestNestedAggregator:
@@ -125,7 +159,7 @@ class TestNestedAggregator:
             wb_dmos, timeline=_timeline(), wb_dmos_mask=mask
         )
 
-        first_hour = result.aggregated_data_.loc[("hour", pd.Timestamp("2024-03-06 00:00:00"))]
+        first_hour = result.aggregated_data_.loc[("hour", pd.Timestamp("2026-08-17 00:00:00"))]
         assert first_hour["wb_all__cadence_spm__avg"] == pytest.approx(100.0)
         # the bout itself is still counted, only its cadence is dropped
         assert first_hour["wb_all__count"] == 2
@@ -139,7 +173,7 @@ class TestNestedAggregator:
             wb_dmos, timeline=_timeline()
         )
 
-        day = result.aggregated_data_.loc[("day", pd.Timestamp("2024-03-06"))]
+        day = result.aggregated_data_.loc[("day", pd.Timestamp("2026-08-17"))]
         assert day["wb_all_sum"] == 3
         assert day["cadence_all_avg"] == pytest.approx((105.0 + 130.0) / 2)
 
@@ -173,3 +207,9 @@ def test_unknown_weighting_is_rejected():
     # without the check a misspelled weighting silently falls through to pooled and returns wrong averages
     with pytest.raises(ValueError, match="Unknown weighting"):
         MultiGranularAggregator(weighting="mean").aggregate(_wb_dmos([0.1], [100.0]), timeline=_timeline())
+
+
+def test_day_start_hour_outside_the_clock_is_rejected():
+    # without the check the day bins silently shift by a whole day and every daily value is wrong
+    with pytest.raises(ValueError, match="day_start_hour"):
+        MultiGranularAggregator(day_start_hour=24).aggregate(_wb_dmos([0.1], [100.0]), timeline=_timeline())

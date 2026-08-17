@@ -2,17 +2,17 @@
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from mobgap.aggregation.uos import (
     RecordingTimeline,
     add_time_bins,
-    is_complete_bin,
+    bin_coverage,
     time_bin_grid,
 )
 from mobgap.data._dataset_from_data import GaitDatasetFromData
 
-# 2024-03-06 is a Wednesday, so the ISO week starts on 2024-03-04
-_START = pd.Timestamp("2024-03-06 14:30:00").timestamp()
+_START = pd.Timestamp("2026-08-17 14:30:00").timestamp()
 
 
 def _timeline(hours: float = 24.0, sampling_rate_hz: float = 10.0) -> RecordingTimeline:
@@ -39,12 +39,12 @@ class TestRecordingTimeline:
     def test_uniform_maps_samples_and_covers_every_sampling_interval(self):
         timeline = _timeline(hours=2)
 
-        assert timeline.start == pd.Timestamp("2024-03-06 14:30:00")
+        assert timeline.start == pd.Timestamp("2026-08-17 14:30:00")
         # the recording covers one sampling interval per sample, so a full two hours
-        assert timeline.end == pd.Timestamp("2024-03-06 16:30:00")
+        assert timeline.end == pd.Timestamp("2026-08-17 16:30:00")
         assert list(timeline.timestamps(np.array([0, 18000]))) == [
-            pd.Timestamp("2024-03-06 14:30:00"),
-            pd.Timestamp("2024-03-06 15:00:00"),
+            pd.Timestamp("2026-08-17 14:30:00"),
+            pd.Timestamp("2026-08-17 15:00:00"),
         ]
 
     def test_sample_times_stay_exact_across_gaps(self):
@@ -53,27 +53,20 @@ class TestRecordingTimeline:
         timeline = RecordingTimeline.from_sample_times(sample_times)
 
         # the uniform mapping would place sample 10 one second after the start
-        assert timeline.timestamps(np.array([10]))[0] == pd.Timestamp("2024-03-06 15:30:00")
-        assert timeline.end == pd.Timestamp("2024-03-06 15:30:10")
+        assert timeline.timestamps(np.array([10]))[0] == pd.Timestamp("2026-08-17 15:30:00")
+        assert timeline.end == pd.Timestamp("2026-08-17 15:30:10")
+        assert timeline.sampling_rate_hz == pytest.approx(1.0)
 
     def test_timezone_converts_utc_to_local_wall_clock(self):
-        # 2024-03-31 00:59 UTC is one minute before the British clocks jump to summer time
-        utc_start = pd.Timestamp("2024-03-31 00:59:00", tz="UTC").timestamp()
+        # 2026-03-29 00:59 UTC is one minute before the British clocks jump to summer time
+        utc_start = pd.Timestamp("2026-03-29 00:59:00", tz="UTC").timestamp()
         timeline = RecordingTimeline.from_uniform(utc_start, 7200, 1.0, timezone="Europe/London")
 
-        assert timeline.start == pd.Timestamp("2024-03-31 00:59:00")
+        assert timeline.start == pd.Timestamp("2026-03-29 00:59:00")
         # the local clock jumps from 01:00 to 02:00, so two hours of samples end at 03:59
-        assert timeline.end == pd.Timestamp("2024-03-31 03:59:00")
+        assert timeline.end == pd.Timestamp("2026-03-29 03:59:00")
 
-    def test_from_datapoint_reads_the_recording_metadata(self):
-        dataset = _dataset(pd.RangeIndex(100, name="samples"), {"cwa_start_time": _START, "timezone": None})
-
-        timeline = RecordingTimeline.from_datapoint(dataset[0])
-
-        assert timeline.start == pd.Timestamp("2024-03-06 14:30:00")
-        assert timeline.end == pd.Timestamp("2024-03-06 14:30:10")
-
-    def test_from_datapoint_prefers_the_time_index(self):
+    def test_from_datapoint_reads_the_time_index(self):
         # a time-indexed dataset carries the true sample times, gaps included
         sample_times = np.concatenate([_START + np.arange(10), _START + 3600 + np.arange(10)])
         dataset = _dataset(pd.Index(sample_times, name="time"), {"cwa_start_time": _START + 999})
@@ -81,8 +74,14 @@ class TestRecordingTimeline:
         timeline = RecordingTimeline.from_datapoint(dataset[0])
 
         # the metadata start time is deliberately wrong, so only the index can give this answer
-        assert timeline.start == pd.Timestamp("2024-03-06 14:30:00")
-        assert timeline.timestamps(np.array([10]))[0] == pd.Timestamp("2024-03-06 15:30:00")
+        assert timeline.start == pd.Timestamp("2026-08-17 14:30:00")
+        assert timeline.timestamps(np.array([10]))[0] == pd.Timestamp("2026-08-17 15:30:00")
+
+    def test_from_datapoint_without_a_time_index(self):
+        dataset = _dataset(pd.RangeIndex(100, name="samples"), {"cwa_start_time": _START})
+
+        with pytest.raises(ValueError, match="include_time_index=True"):
+            RecordingTimeline.from_datapoint(dataset[0])
 
 
 class TestAddTimeBins:
@@ -94,55 +93,100 @@ class TestAddTimeBins:
         binned = add_time_bins(wb_dmos, timeline)
 
         assert list(binned["start_time"]) == [
-            pd.Timestamp("2024-03-06 14:30:00"),
-            pd.Timestamp("2024-03-06 23:59:59"),
-            pd.Timestamp("2024-03-07 00:00:01"),
+            pd.Timestamp("2026-08-17 14:30:00"),
+            pd.Timestamp("2026-08-17 23:59:59"),
+            pd.Timestamp("2026-08-18 00:00:01"),
         ]
         assert list(binned["hour_start"]) == [
-            pd.Timestamp("2024-03-06 14:00:00"),
-            pd.Timestamp("2024-03-06 23:00:00"),
-            pd.Timestamp("2024-03-07 00:00:00"),
+            pd.Timestamp("2026-08-17 14:00:00"),
+            pd.Timestamp("2026-08-17 23:00:00"),
+            pd.Timestamp("2026-08-18 00:00:00"),
         ]
         assert list(binned["day_start"]) == [
-            pd.Timestamp("2024-03-06"),
-            pd.Timestamp("2024-03-06"),
-            pd.Timestamp("2024-03-07"),
+            pd.Timestamp("2026-08-17"),
+            pd.Timestamp("2026-08-17"),
+            pd.Timestamp("2026-08-18"),
         ]
-        # both days are in the week starting Monday 2024-03-04
-        assert list(binned["week_start"]) == [pd.Timestamp("2024-03-04")] * 3
+
+    def test_day_start_hour_moves_the_day_boundary(self):
+        timeline = _timeline(hours=24)
+        # 23:59:59 and 00:00:01 both fall before 04:00, so both belong to the day starting 2026-08-17 04:00
+        wb_dmos = pd.DataFrame({"start": [0, 341990, 342010]}, index=pd.Index([0, 1, 2], name="wb_id"))
+
+        binned = add_time_bins(wb_dmos, timeline, day_start_hour=4)
+
+        assert list(binned["day_start"]) == [pd.Timestamp("2026-08-17 04:00:00")] * 3
 
 
 class TestTimeBinGrid:
     def test_grid_covers_every_touched_bin(self):
         timeline = _timeline(hours=24)
 
-        assert list(time_bin_grid(timeline, "day")) == [pd.Timestamp("2024-03-06"), pd.Timestamp("2024-03-07")]
-        assert list(time_bin_grid(timeline, "week")) == [pd.Timestamp("2024-03-04")]
+        assert list(time_bin_grid(timeline, "day")) == [pd.Timestamp("2026-08-17"), pd.Timestamp("2026-08-18")]
         assert len(time_bin_grid(timeline, "hour")) == 25
+
+    def test_grid_follows_the_day_start_hour(self):
+        # the recording runs 14:30 to 14:30, so a day starting at 16:00 is only ever touched twice
+        timeline = _timeline(hours=24)
+
+        grid = time_bin_grid(timeline, "day", day_start_hour=16)
+
+        assert list(grid) == [pd.Timestamp("2026-08-16 16:00:00"), pd.Timestamp("2026-08-17 16:00:00")]
 
     def test_grid_excludes_a_bin_starting_at_the_recording_end(self):
         # the recording ends exactly at midnight, so the following day holds no samples
-        timeline = RecordingTimeline.from_uniform(pd.Timestamp("2024-03-06 22:00:00").timestamp(), 7200, 1.0)
+        timeline = RecordingTimeline.from_uniform(pd.Timestamp("2026-08-17 22:00:00").timestamp(), 7200, 1.0)
 
-        assert list(time_bin_grid(timeline, "day")) == [pd.Timestamp("2024-03-06")]
+        assert list(time_bin_grid(timeline, "day")) == [pd.Timestamp("2026-08-17")]
 
-    def test_completeness_needs_full_coverage(self):
+
+class TestBinCoverage:
+    def test_uniform_timeline_only_loses_the_end_bins(self):
         timeline = _timeline(hours=24)
-        grid = time_bin_grid(timeline, "day")
+        grid = time_bin_grid(timeline, "hour")
 
-        # the recording starts at 14:30 and ends at 14:30, so neither day is complete
-        assert not is_complete_bin(grid, timeline, "day").any()
-        assert is_complete_bin(time_bin_grid(timeline, "hour"), timeline, "hour").sum() == 23
+        coverage = bin_coverage(grid, timeline, "hour")
 
-    def test_a_complete_week_needs_all_seven_days(self):
-        # three days starting on a Monday complete no week, however well they line up with its start
-        short = RecordingTimeline.from_uniform(pd.Timestamp("2024-03-04 00:00:00").timestamp(), 3 * 864000, 10.0)
+        # the recording starts and ends at half past the hour
+        assert coverage[0] == pytest.approx(0.5)
+        assert coverage[-1] == pytest.approx(0.5)
+        assert coverage[1:-1] == pytest.approx(1.0)
 
-        assert not is_complete_bin(time_bin_grid(short, "week"), short, "week").any()
+    def test_sample_times_expose_a_gap_in_the_middle(self):
+        sampling_rate_hz = 10.0
+        start = pd.Timestamp("2026-08-17 00:00:00").timestamp()
+        full = start + np.arange(4 * 3600 * sampling_rate_hz) / sampling_rate_hz
+        # the second half of hour 1 is lost, as omconvert marks lost sectors invalid
+        lost = (full >= start + 5400) & (full < start + 7200)
+        timeline = RecordingTimeline.from_sample_times(full[~lost])
 
-        # Sunday noon plus eight days touches three ISO weeks and covers exactly the middle one
-        full = RecordingTimeline.from_uniform(pd.Timestamp("2024-03-03 12:00:00").timestamp(), 8 * 864000, 10.0)
-        grid = time_bin_grid(full, "week")
+        coverage = bin_coverage(time_bin_grid(timeline, "hour"), timeline, "hour")
 
-        assert len(grid) == 3
-        assert list(grid[is_complete_bin(grid, full, "week")]) == [pd.Timestamp("2024-03-04")]
+        assert coverage[0] == pytest.approx(1.0)
+        assert coverage[1] == pytest.approx(0.5)
+        assert coverage[2] == pytest.approx(1.0)
+
+    def test_gap_is_found_in_the_local_bin_of_a_converted_recording(self):
+        # a UTC clock in British summer time, so the local wall clock runs one hour ahead
+        start = pd.Timestamp("2026-08-17 09:00:00", tz="UTC").timestamp()
+        full = start + np.arange(4 * 3600)
+        lost = (full >= start + 2 * 3600) & (full < start + 2.5 * 3600)
+        timeline = RecordingTimeline.from_sample_times(full[~lost], timezone="Europe/London")
+
+        grid = time_bin_grid(timeline, "hour")
+        coverage = bin_coverage(grid, timeline, "hour")
+
+        assert timeline.start == pd.Timestamp("2026-08-17 10:00:00")
+        assert coverage[grid == pd.Timestamp("2026-08-17 12:00:00")] == pytest.approx(0.5)
+        assert coverage[grid == pd.Timestamp("2026-08-17 11:00:00")] == pytest.approx(1.0)
+
+    def test_gap_reduces_the_coverage_of_the_whole_day(self):
+        start = pd.Timestamp("2026-08-17 00:00:00").timestamp()
+        full = start + np.arange(24 * 3600)
+        # a six hour dropout in the middle of the day
+        lost = (full >= start + 6 * 3600) & (full < start + 12 * 3600)
+        timeline = RecordingTimeline.from_sample_times(full[~lost])
+
+        coverage = bin_coverage(time_bin_grid(timeline, "day"), timeline, "day")
+
+        assert coverage == pytest.approx([0.75])

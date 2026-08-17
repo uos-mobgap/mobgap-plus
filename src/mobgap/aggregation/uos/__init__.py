@@ -1,10 +1,11 @@
 """UoS-MobGap aggregation extensions for MobGap.
 
-This extension adds per-hour, per-day, and per-week DMO aggregation on top of the
+This extension adds per-hour and per-day DMO aggregation on top of the
 aggregators of :mod:`mobgap.aggregation`.
 """
 
 from mobgap.aggregation.uos._multi_granular import (
+    COVERAGE_COLUMN,
     TIME_BIN_ORDER,
     TOTAL_COLUMNS,
     MultiGranularAggregator,
@@ -16,11 +17,12 @@ from mobgap.aggregation.uos._time_bins import (
     RecordingTimeline,
     TimeBin,
     add_time_bins,
-    is_complete_bin,
+    bin_coverage,
     time_bin_grid,
 )
 
 __all__ = [
+    "COVERAGE_COLUMN",
     "TIME_BIN_COLUMNS",
     "TIME_BIN_ORDER",
     "TIME_BIN_WIDTHS",
@@ -30,6 +32,6 @@ __all__ = [
     "TimeBin",
     "Weighting",
     "add_time_bins",
-    "is_complete_bin",
+    "bin_coverage",
     "time_bin_grid",
 ]
