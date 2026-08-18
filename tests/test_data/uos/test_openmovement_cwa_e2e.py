@@ -85,3 +85,33 @@ def test_drop_invalid_samples_with_real_processed_recording(cal_success_cwa: Pat
     assert len(datapoint.data_ss) == 8_000 - 5
     assert datapoint.recording_metadata["cwa_invalid_samples"] == 5
     assert datapoint.recording_metadata["cwa_invalid_samples_dropped"] == 5
+
+
+def test_float32_dtype_is_forwarded_and_preserved(cal_success_cwa: Path) -> None:
+    """``dtype="float32"`` (new in omcwa) should reach process_cwa and survive the g -> m/s^2 conversion."""
+    import numpy as np
+
+    dataset = load_cwa_as_dataset(
+        cal_success_cwa,
+        _PARTICIPANT_METADATA,
+        resample_hz=100.0,
+        dtype="float32",
+    )
+
+    datapoint = dataset[0]
+    assert datapoint.data_ss["acc_x"].to_numpy().dtype == np.float32
+    assert datapoint.data_ss["gyr_x"].to_numpy().dtype == np.float32
+
+
+def test_calibration_source_player_matches_data_on_the_golden_fixture(cal_success_cwa: Path) -> None:
+    """``calibration_source="player"`` (the pre-upgrade omcwa default) must still work end-to-end."""
+    dataset = load_cwa_as_dataset(
+        cal_success_cwa,
+        _PARTICIPANT_METADATA,
+        resample_hz=100.0,
+        calibration_source="player",
+    )
+
+    datapoint = dataset[0]
+    assert datapoint.recording_metadata["cwa_calibration_success"] is True
+    assert len(datapoint.data_ss) == 8_000

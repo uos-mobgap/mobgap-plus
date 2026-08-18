@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     from omcwa.types import ProcessedRecording
 
 CalibrationFailurePolicy = Literal["raise", "identity"]
+CalibrationSource = Literal["data", "player"]
+CwaDtype = Literal["float64", "float32"]
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,11 @@ class _MaskedRecording:
     acc: np.ndarray
     gyr: Optional[np.ndarray]
     calibration: Any
+
+    @property
+    def first_sample_time(self) -> float:
+        """Time of the first sample, matching ``ProcessedRecording.first_sample_time``."""
+        return float(self.time[0])
 
 
 def _import_process_cwa() -> Any:
@@ -97,7 +104,8 @@ def _recording_to_dataframe(
     if include_time_index:
         # use utc unix seconds as a numeric index. On some hpc stacks
         # pandas DatetimeIndex and pd.to_datetime(..., unit="s") segfaults, float indices do not.
-        df.index = pd.Index(out.time.astype(np.float64), name="time")
+        # out.time is float64 already (omcwa's contract, regardless of the acc/gyr dtype).
+        df.index = pd.Index(out.time, name="time")
     else:
         df.index = pd.RangeIndex(len(df), name="samples")
 
@@ -114,10 +122,12 @@ def load_cwa_as_dataset(
     resample_hz: Optional[float] = None,
     calibrate: bool = True,
     on_calibration_failure: CalibrationFailurePolicy = "raise",
+    calibration_source: CalibrationSource = "data",
     drop_invalid: bool = True,
     time_range: Optional[tuple[float, float]] = None,
     metadata_time_measure: Optional[str] = None,
     metadata_cohort: Optional[str] = None,
+    dtype: CwaDtype = "float64",
 ) -> GaitDatasetFromData:
     """Load a CWA file into a :class:`mobgap.data.GaitDatasetFromData`.
 
@@ -159,6 +169,12 @@ def load_cwa_as_dataset(
         Policy when auto-calibration fails. ``"raise"`` (default) raises
         :class:`omcwa.CalibrationError`. ``"identity"`` continues with
         omconvert's identity fallback.
+    calibration_source
+        Source omconvert reads for AX6 auto-calibration. ``"data"`` (default)
+        reads the calibration sectors directly and is faster. ``"player"``
+        uses omconvert's older interpolating-player path; pick it only to
+        reproduce calibration numerics computed before this became the
+        omcwa default.
     drop_invalid
         When True (default), remove resampled samples that omconvert marks as
         invalid (``ProcessedRecording.valid`` is False). This matches
@@ -178,6 +194,11 @@ def load_cwa_as_dataset(
         Mobilise-D dataset loaders take cohort from the folder/dataset index
         rather than ``infoForAlgo.mat`` itself, so a real ``.mat`` source
         usually needs this to end up with a non-``None`` cohort.
+    dtype
+        Output precision for ``acc``/``gyr``. ``"float64"`` (default) matches
+        every consumer today. ``"float32"`` halves resample memory; per
+        omcwa, output stays within one float32 ULP of the float64 result, but
+        verify against your downstream pipeline before relying on it.
 
     Returns
     -------
@@ -220,6 +241,10 @@ def load_cwa_as_dataset(
     - ``cwa_start_time`` — Unix timestamp in seconds of the first processed sample
     - ``cwa_calibration_success`` — omconvert auto-calibration success flag
     - ``cwa_calibration_error_code`` — omconvert error code (0 on success)
+    - ``cwa_calibration_num_axes`` — accelerometer axes that reached the
+      stationary-point coverage auto-calibration needs
+    - ``cwa_calibration_mean_svm_error`` — mean stationary-point fit error
+      of the auto-calibration
     - ``cwa_invalid_samples`` — count of invalid samples before optional dropping
     - ``cwa_invalid_samples_dropped`` — invalid samples removed when
       ``drop_invalid=True`` (0 when ``drop_invalid=False``)
@@ -260,10 +285,12 @@ def load_cwa_as_dataset(
         sample_rate_hz=resample_hz if resample_hz is not None else 0.0,
         calibrate=calibrate,
         on_calibration_failure=on_calibration_failure,
+        calibration_source=calibration_source,
         time_range=time_range,
+        dtype=dtype,
     )
 
-    if len(out.time) == 0:
+    if out.n_samples == 0:
         raise ValueError("CWA recording produced no samples after processing.")
 
     invalid_count = int((~out.valid).sum())
@@ -277,12 +304,14 @@ def load_cwa_as_dataset(
     recording_id = path.stem
     recording_meta = dict(recording_metadata or {})
     recording_meta.setdefault("cwa_source_path", str(path.resolve()))
-    recording_meta.setdefault("cwa_start_time", float(out.time[0]))
+    recording_meta.setdefault("cwa_start_time", out.first_sample_time)
     recording_meta.setdefault("cwa_invalid_samples", invalid_count)
     recording_meta.setdefault("cwa_invalid_samples_dropped", dropped_invalid)
 
     recording_meta.setdefault("cwa_calibration_success", out.calibration.success)
     recording_meta.setdefault("cwa_calibration_error_code", out.calibration.error_code)
+    recording_meta.setdefault("cwa_calibration_num_axes", out.calibration.num_axes)
+    recording_meta.setdefault("cwa_calibration_mean_svm_error", out.calibration.mean_svm_error)
 
     return GaitDatasetFromData(
         {recording_id: {sensor_position: sensor_df}},

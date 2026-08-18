@@ -24,6 +24,7 @@ class _StubProcessedRecording:
     ) -> None:
         self.sample_rate_hz = 100.0
         self.time = np.array([1_700_000_000.0, 1_700_000_000.01])
+        self.n_samples = len(self.time)
         self.acc = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
         self.gyr = np.array([[10.0, 20.0, 30.0], [11.0, 21.0, 31.0]]) if has_gyro else None
         self.valid = np.array([True, True], dtype=np.bool_)
@@ -32,7 +33,13 @@ class _StubProcessedRecording:
         self.calibration = MagicMock(
             success=calibration_success,
             error_code=calibration_error_code,
+            num_axes=6,
+            mean_svm_error=0.01,
         )
+
+    @property
+    def first_sample_time(self) -> float:
+        return float(self.time[0])
 
 
 class TestRecordingToDataframe:
@@ -79,6 +86,9 @@ class TestLoadCwaAsDataset:
 
         load_cwa_as_dataset(cwa_path, _PARTICIPANT_METADATA)
         assert mock_process_cwa.call_args.kwargs["sample_rate_hz"] == 0.0
+        # defaults match omcwa's own defaults, so a bare call picks up its behaviour unchanged
+        assert mock_process_cwa.call_args.kwargs["calibration_source"] == "data"
+        assert mock_process_cwa.call_args.kwargs["dtype"] == "float64"
 
         dataset = load_cwa_as_dataset(
             cwa_path,
@@ -86,8 +96,12 @@ class TestLoadCwaAsDataset:
             recording_metadata={"measurement_condition": "laboratory"},
             include_time_index=True,
             resample_hz=50.0,
+            calibration_source="player",
+            dtype="float32",
         )
         assert mock_process_cwa.call_args.kwargs["sample_rate_hz"] == 50.0
+        assert mock_process_cwa.call_args.kwargs["calibration_source"] == "player"
+        assert mock_process_cwa.call_args.kwargs["dtype"] == "float32"
 
         datapoint = dataset[0]
         assert datapoint.group_label.recording_id == "recording"
@@ -99,6 +113,8 @@ class TestLoadCwaAsDataset:
         assert datapoint.recording_metadata["cwa_start_time"] == 1_700_000_000.0
         assert datapoint.recording_metadata["cwa_calibration_success"] is False
         assert datapoint.recording_metadata["cwa_calibration_error_code"] == -1
+        assert datapoint.recording_metadata["cwa_calibration_num_axes"] == 6
+        assert datapoint.recording_metadata["cwa_calibration_mean_svm_error"] == 0.01
         assert datapoint.recording_metadata["cwa_invalid_samples"] == 0
         assert datapoint.recording_metadata["cwa_invalid_samples_dropped"] == 0
 
@@ -106,6 +122,7 @@ class TestLoadCwaAsDataset:
     def test_empty_processed_recording_raises(self, mock_import_process_cwa, tmp_path):
         stub = _StubProcessedRecording()
         stub.time = np.array([], dtype=np.float64)
+        stub.n_samples = 0
         stub.acc = np.empty((0, 3))
         stub.gyr = np.empty((0, 3))
         stub.valid = np.array([], dtype=np.bool_)
