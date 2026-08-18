@@ -156,7 +156,13 @@ class RecordingTimeline:
         )
 
     @classmethod
-    def from_sample_times(cls, sample_times: np.ndarray, *, timezone: str | None = None) -> RecordingTimeline:
+    def from_sample_times(
+        cls,
+        sample_times: np.ndarray,
+        *,
+        sampling_rate_hz: float | None = None,
+        timezone: str | None = None,
+    ) -> RecordingTimeline:
         """Build a timeline from the timestamp of every sample.
 
         This is exact even when samples are missing from the recording, because
@@ -167,6 +173,12 @@ class RecordingTimeline:
         ----------
         sample_times
             Unix timestamps in seconds, one per sample, in recording order.
+        sampling_rate_hz
+            The recording's nominal sampling rate. Pass this whenever it is
+            known -- if omitted, it is estimated from ``sample_times`` as the
+            median of consecutive differences, which is wrong whenever the
+            leading samples straddle a dropped stretch (the first two
+            *surviving* samples then look like one huge interval).
         timezone
             IANA timezone name, or ``None`` when the recording clock is already local.
 
@@ -176,11 +188,17 @@ class RecordingTimeline:
             Timeline covering the samples up to one sampling interval after the last one.
         """
         sample_times = np.asarray(sample_times, dtype=float)
-        sampling_interval_s = sample_times[1] - sample_times[0]
+        if sampling_rate_hz is None:
+            sampling_interval_s = float(np.median(np.diff(sample_times)))
+            sampling_rate_hz = 1.0 / sampling_interval_s
+        else:
+            sampling_rate_hz = float(sampling_rate_hz)
+            sampling_interval_s = 1.0 / sampling_rate_hz
+
         return cls(
             start_epoch_s=float(sample_times[0]),
             end_epoch_s=float(sample_times[-1]) + sampling_interval_s,
-            sampling_rate_hz=1.0 / sampling_interval_s,
+            sampling_rate_hz=sampling_rate_hz,
             timezone=timezone,
             sample_times=sample_times,
         )
@@ -223,7 +241,11 @@ class RecordingTimeline:
         if timezone is None:
             timezone = datapoint.recording_metadata.get("timezone")
 
-        return cls.from_sample_times(data.index.to_numpy(), timezone=timezone)
+        return cls.from_sample_times(
+            data.index.to_numpy(),
+            sampling_rate_hz=datapoint.sampling_rate_hz,
+            timezone=timezone,
+        )
 
     def timestamps(self, samples: np.ndarray | pd.Series) -> pd.DatetimeIndex:
         """Return the local wall-clock timestamps of the given sample indices.
@@ -345,7 +367,9 @@ def bin_coverage(grid: pd.DatetimeIndex, timeline: RecordingTimeline, time_bin: 
     Returns
     -------
     numpy.ndarray
-        Coverage of every bin, between 0 and 1.
+        Coverage of every bin, between 0 and 1. A DST fall-back bin holds two
+        wall-clock hours of samples merged under one naive local-time label;
+        its coverage is still clipped to 1 rather than reporting ~2.
     """
     width = TIME_BIN_WIDTHS[time_bin]
     edges = grid.append(pd.DatetimeIndex([grid[-1] + width]))
@@ -358,4 +382,5 @@ def bin_coverage(grid: pd.DatetimeIndex, timeline: RecordingTimeline, time_bin: 
 
     # counting the samples that fall in each bin catches gaps anywhere in the recording
     samples_per_bin = np.diff(np.searchsorted(timeline.sample_times, _to_epoch_s(edges, timeline.timezone)))
-    return samples_per_bin / (width.total_seconds() * timeline.sampling_rate_hz)
+    coverage = samples_per_bin / (width.total_seconds() * timeline.sampling_rate_hz)
+    return np.clip(coverage, 0.0, 1.0)

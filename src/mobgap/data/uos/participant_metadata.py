@@ -19,6 +19,9 @@ import pandas as pd
 
 _REQUIRED_MOBGAP_KEYS = ("height_m", "sensor_height_m", "cohort")
 _REQUIRED_MOBILISED_KEYS = ("Height", "SensorHeight", "Cohort")
+# Cohort alone is deliberately excluded: Mobilise-D dataset loaders take cohort from the
+# folder/index, not from infoForAlgo.mat, so real files never have this key.
+_MOBILISED_HEIGHT_KEYS = ("Height", "SensorHeight")
 
 ParticipantMetadataSource = Union[str, Path, Mapping[str, Any], pd.Series, pd.DataFrame]
 
@@ -44,20 +47,18 @@ def convert_mobilised_info_to_participant_metadata(
         Normalised metadata with at least ``height_m``, ``sensor_height_m``, and
         ``cohort``, plus optional Mobilise-D extras when present in ``meta_data``.
     """
-    missing = [key for key in ("Height", "SensorHeight") if key not in meta_data]
+    missing = [key for key in _MOBILISED_HEIGHT_KEYS if key not in meta_data]
     if missing:
         raise ValueError(
             "Mobilise-D participant metadata is missing required keys "
             f"{missing}. Expected Height and SensorHeight (cm)."
         )
 
-    if cohort is not None:
-        cohort_value: str | None = str(cohort)
-    elif "Cohort" in meta_data and meta_data["Cohort"] is not None:
-        cohort_value = str(meta_data["Cohort"])
-    else:
-        # mobilised-d dataset loaders often take cohort from the index instead
-        cohort_value = None
+    # mobilised-d dataset loaders often take cohort from the index instead, so
+    # meta_data typically has no Cohort key at all; pd.isna also catches an
+    # explicit None and an empty-CSV-cell NaN, none of which should become "None"/"nan".
+    raw_cohort = cohort if cohort is not None else meta_data.get("Cohort")
+    cohort_value = None if pd.isna(raw_cohort) else str(raw_cohort)
 
     walking_aid_raw = meta_data.get("WalkingAid_01", -1)
     try:
@@ -80,20 +81,29 @@ def convert_mobilised_info_to_participant_metadata(
     return dict(sorted(result.items()))
 
 
-def normalize_participant_metadata(raw: Mapping[str, Any]) -> dict[str, Any]:
+def normalize_participant_metadata(raw: Mapping[str, Any], *, cohort: str | None = None) -> dict[str, Any]:
     """Normalise a single-participant mapping to MobGap participant metadata.
 
     Accepts either:
 
     - MobGap keys: ``height_m``, ``sensor_height_m``, ``cohort`` (meters)
-    - Mobilise-D keys: ``Height``, ``SensorHeight``, ``Cohort`` (centimetres)
+    - Mobilise-D keys: ``Height``, ``SensorHeight`` (centimetres), with ``Cohort``
+      optional -- real ``infoForAlgo.mat`` files do not carry it
 
     Extra keys are preserved. Mobilise-D optional fields are mapped to the same
     names used by :class:`mobgap.data.MobilisedParticipantMetadata`.
+
+    Parameters
+    ----------
+    raw
+        Single-participant mapping in either schema.
+    cohort
+        Optional cohort override, used when ``raw`` has no (or a blank)
+        ``Cohort``/``cohort`` value. Takes precedence over ``raw`` when given.
     """
     keys = set(raw)
     has_mobgap = {"height_m", "sensor_height_m", "cohort"} <= keys
-    has_mobilised = {"Height", "SensorHeight", "Cohort"} <= keys
+    has_mobilised = set(_MOBILISED_HEIGHT_KEYS) <= keys
 
     # prefer mobgap schema when present so mixed tables do not double-convert
     if has_mobgap:
@@ -110,18 +120,19 @@ def normalize_participant_metadata(raw: Mapping[str, Any]) -> dict[str, Any]:
         result = dict(raw)
         result["height_m"] = float(result["height_m"])
         result["sensor_height_m"] = float(result["sensor_height_m"])
-        result["cohort"] = str(result["cohort"])
+        raw_cohort = cohort if cohort is not None else result["cohort"]
+        result["cohort"] = None if pd.isna(raw_cohort) else str(raw_cohort)
         return result
 
     if has_mobilised:
-        return convert_mobilised_info_to_participant_metadata(raw)
+        return convert_mobilised_info_to_participant_metadata(raw, cohort=cohort)
 
     missing_mobgap = [key for key in _REQUIRED_MOBGAP_KEYS if key not in keys]
-    missing_mobilised = [key for key in _REQUIRED_MOBILISED_KEYS if key not in keys]
+    missing_mobilised = [key for key in _MOBILISED_HEIGHT_KEYS if key not in keys]
     raise ValueError(
         "participant_metadata must use MobGap keys "
         f"{list(_REQUIRED_MOBGAP_KEYS)} (meters) or Mobilise-D keys "
-        f"{list(_REQUIRED_MOBILISED_KEYS)} (centimetres). "
+        f"{list(_MOBILISED_HEIGHT_KEYS)} (centimetres). "
         f"Missing MobGap keys: {missing_mobgap}; "
         f"missing Mobilise-D keys: {missing_mobilised}."
     )
@@ -138,7 +149,7 @@ def _mapping_from_table(table: pd.Series | pd.DataFrame) -> dict[str, Any]:
     return table.iloc[0].to_dict()
 
 
-def _load_from_path(path: Path, *, time_measure: str | None) -> dict[str, Any]:
+def _load_from_path(path: Path, *, time_measure: str | None, cohort: str | None) -> dict[str, Any]:
     """Load participant metadata from a Mobilise-D ``infoForAlgo.mat`` or a ``.csv`` file."""
     if not path.is_file():
         raise FileNotFoundError(f"Participant metadata file not found: {path}")
@@ -160,10 +171,10 @@ def _load_from_path(path: Path, *, time_measure: str | None) -> dict[str, Any]:
         else:
             selected = raw[time_measure]
 
-        return normalize_participant_metadata(selected)
+        return normalize_participant_metadata(selected, cohort=cohort)
 
     if suffix == ".csv":
-        return normalize_participant_metadata(_mapping_from_table(pd.read_csv(path)))
+        return normalize_participant_metadata(_mapping_from_table(pd.read_csv(path)), cohort=cohort)
 
     raise ValueError(
         f"Unsupported participant metadata file type {suffix!r} for {path}. "
@@ -175,6 +186,7 @@ def load_participant_metadata(
     source: ParticipantMetadataSource,
     *,
     time_measure: str | None = None,
+    cohort: str | None = None,
 ) -> dict[str, Any]:
     """Load participant metadata from a path, table, or mapping.
 
@@ -192,6 +204,12 @@ def load_participant_metadata(
     time_measure
         Optional first-level key when ``source`` is a Mobilise-D ``.mat`` file
         (usually ``TimeMeasure1``). Defaults to the first entry in the file.
+    cohort
+        Optional cohort override. Mobilise-D dataset loaders typically take
+        cohort from the folder/dataset index rather than ``infoForAlgo.mat``
+        itself, so real ``.mat`` sources usually need this to end up with a
+        non-``None`` cohort. Takes precedence over any cohort present in
+        ``source``.
 
     Returns
     -------
@@ -200,13 +218,13 @@ def load_participant_metadata(
         :func:`mobgap.data.uos.load_cwa_as_dataset`.
     """
     if isinstance(source, (str, Path)):
-        return _load_from_path(Path(source).expanduser(), time_measure=time_measure)
+        return _load_from_path(Path(source).expanduser(), time_measure=time_measure, cohort=cohort)
 
     if isinstance(source, (pd.Series, pd.DataFrame)):
-        return normalize_participant_metadata(_mapping_from_table(source))
+        return normalize_participant_metadata(_mapping_from_table(source), cohort=cohort)
 
     if isinstance(source, Mapping):
-        return normalize_participant_metadata(source)
+        return normalize_participant_metadata(source, cohort=cohort)
 
     raise TypeError(
         "participant_metadata must be a mapping, pandas Series/DataFrame, "

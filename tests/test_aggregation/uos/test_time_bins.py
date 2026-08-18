@@ -57,6 +57,34 @@ class TestRecordingTimeline:
         assert timeline.end == pd.Timestamp("2026-08-17 15:30:10")
         assert timeline.sampling_rate_hz == pytest.approx(1.0)
 
+    def test_sample_times_infers_rate_from_the_median_interval_despite_a_leading_gap(self):
+        # an isolated first sample followed by a dropout would make the naive sample_times[1]
+        # - sample_times[0] interval look like the whole gap, not the true 100 Hz sampling rate
+        rest = _START + 500.0 + np.arange(3 * 60 * 100) / 100.0
+        sample_times = np.concatenate([[_START], rest])
+
+        timeline = RecordingTimeline.from_sample_times(sample_times)
+
+        assert timeline.sampling_rate_hz == pytest.approx(100.0, rel=1e-3)
+
+    def test_sample_times_prefers_the_explicit_sampling_rate_over_inference(self):
+        rest = _START + 500.0 + np.arange(3 * 60 * 100) / 100.0
+        sample_times = np.concatenate([[_START], rest])
+
+        timeline = RecordingTimeline.from_sample_times(sample_times, sampling_rate_hz=100.0)
+
+        assert timeline.sampling_rate_hz == 100.0
+
+    def test_from_datapoint_uses_the_dataset_sampling_rate_not_inference(self):
+        # the leading gap in the index would make naive inference from two samples wildly wrong
+        rest = _START + 500.0 + np.arange(3 * 60 * 100) / 100.0
+        sample_times = np.concatenate([[_START], rest])
+        dataset = _dataset(pd.Index(sample_times, name="time"), {})
+
+        timeline = RecordingTimeline.from_datapoint(dataset[0])
+
+        assert timeline.sampling_rate_hz == pytest.approx(10.0, rel=1e-3)
+
     def test_timezone_converts_utc_to_local_wall_clock(self):
         # 2026-03-29 00:59 UTC is one minute before the British clocks jump to summer time
         utc_start = pd.Timestamp("2026-03-29 00:59:00", tz="UTC").timestamp()
@@ -179,6 +207,19 @@ class TestBinCoverage:
         assert timeline.start == pd.Timestamp("2026-08-17 10:00:00")
         assert coverage[grid == pd.Timestamp("2026-08-17 12:00:00")] == pytest.approx(0.5)
         assert coverage[grid == pd.Timestamp("2026-08-17 11:00:00")] == pytest.approx(1.0)
+
+    def test_dst_fallback_hour_is_clipped_to_1_not_2(self):
+        # 2023-10-29: British clocks fall back at 02:00 BST -> 01:00 GMT, so local 01:00-01:59
+        # occurs twice -- a gapless recording puts two hours of samples under that one label
+        start = pd.Timestamp("2023-10-29 00:00:00", tz="UTC").timestamp()
+        full = start + np.arange(3 * 3600)
+        timeline = RecordingTimeline.from_sample_times(full, sampling_rate_hz=1.0, timezone="Europe/London")
+
+        grid = time_bin_grid(timeline, "hour")
+        coverage = bin_coverage(grid, timeline, "hour")
+
+        assert coverage[grid == pd.Timestamp("2023-10-29 01:00:00")] == pytest.approx(1.0)
+        assert coverage.max() <= 1.0
 
     def test_gap_reduces_the_coverage_of_the_whole_day(self):
         start = pd.Timestamp("2026-08-17 00:00:00").timestamp()

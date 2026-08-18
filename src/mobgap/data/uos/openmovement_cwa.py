@@ -117,6 +117,7 @@ def load_cwa_as_dataset(
     drop_invalid: bool = True,
     time_range: Optional[tuple[float, float]] = None,
     metadata_time_measure: Optional[str] = None,
+    metadata_cohort: Optional[str] = None,
 ) -> GaitDatasetFromData:
     """Load a CWA file into a :class:`mobgap.data.GaitDatasetFromData`.
 
@@ -171,6 +172,12 @@ def load_cwa_as_dataset(
     metadata_time_measure
         Optional first-level key when ``participant_metadata`` is a Mobilise-D
         ``.mat`` file. Defaults to the first entry in the file.
+    metadata_cohort
+        Optional cohort override for ``participant_metadata``, taking
+        precedence over any cohort present in ``participant_metadata``.
+        Mobilise-D dataset loaders take cohort from the folder/dataset index
+        rather than ``infoForAlgo.mat`` itself, so a real ``.mat`` source
+        usually needs this to end up with a non-``None`` cohort.
 
     Returns
     -------
@@ -240,6 +247,7 @@ def load_cwa_as_dataset(
     participant_metadata = load_participant_metadata(
         participant_metadata,
         time_measure=metadata_time_measure,
+        cohort=metadata_cohort,
     )
 
     process_cwa = _import_process_cwa()

@@ -45,6 +45,21 @@ class TestConvertMobilisedInfo:
         out = convert_mobilised_info_to_participant_metadata(_MOBILISED, cohort="PD")
         assert out["cohort"] == "PD"
 
+    def test_missing_cohort_stays_none(self):
+        raw = {"Height": 175.0, "SensorHeight": 100.0}
+        out = convert_mobilised_info_to_participant_metadata(raw)
+        assert out["cohort"] is None
+
+    def test_explicit_none_cohort_stays_none(self):
+        raw = {"Height": 175.0, "SensorHeight": 100.0, "Cohort": None}
+        out = convert_mobilised_info_to_participant_metadata(raw)
+        assert out["cohort"] is None
+
+    def test_nan_cohort_stays_none(self):
+        raw = {"Height": 175.0, "SensorHeight": 100.0, "Cohort": float("nan")}
+        out = convert_mobilised_info_to_participant_metadata(raw)
+        assert out["cohort"] is None
+
 
 class TestNormalizeParticipantMetadata:
     def test_mobgap_schema(self):
@@ -73,6 +88,25 @@ class TestNormalizeParticipantMetadata:
         with pytest.raises(ValueError):
             fn(payload)
 
+    def test_mobgap_schema_none_cohort_stays_none(self):
+        out = normalize_participant_metadata({**_MOBGAP, "cohort": None})
+        assert out["cohort"] is None
+
+    def test_mobgap_schema_cohort_override_takes_precedence(self):
+        out = normalize_participant_metadata(_MOBGAP, cohort="PD")
+        assert out["cohort"] == "PD"
+
+    def test_mobilised_schema_without_cohort_key(self):
+        raw = {"Height": 175.0, "SensorHeight": 100.0}
+        out = normalize_participant_metadata(raw)
+        assert out["cohort"] is None
+        assert out["height_m"] == pytest.approx(1.75)
+
+    def test_mobilised_schema_cohort_override(self):
+        raw = {"Height": 175.0, "SensorHeight": 100.0}
+        out = normalize_participant_metadata(raw, cohort="PD")
+        assert out["cohort"] == "PD"
+
 
 class TestLoadParticipantMetadata:
     def test_from_dataframe_mobilised_schema(self):
@@ -97,3 +131,30 @@ class TestLoadParticipantMetadata:
     def test_empty_dataframe_raises(self):
         with pytest.raises(ValueError, match="empty"):
             load_participant_metadata(pd.DataFrame())
+
+    def test_empty_csv_cell_cohort_stays_none(self, tmp_path: Path):
+        csv_path = tmp_path / "meta.csv"
+        pd.DataFrame([{"Height": 175.0, "SensorHeight": 100.0, "Cohort": ""}]).to_csv(csv_path, index=False)
+        out = load_participant_metadata(csv_path)
+        assert out["cohort"] is None
+
+    def test_real_infoforalgo_mat_without_cohort(self):
+        """Real Mobilise-D infoForAlgo.mat files carry no Cohort key at all (it lives in the folder/index)."""
+        path = (
+            Path(__file__).resolve().parents[2]
+            / "test_data"
+            / "data"
+            / "lab_missing_sensor"
+            / "HA"
+            / "001"
+            / "infoForAlgo.mat"
+        )
+        if not path.is_file():
+            pytest.skip(f"fixture not found: {path}")
+
+        out = load_participant_metadata(path)
+        assert out["cohort"] is None
+        assert out["height_m"] > 0
+
+        out_with_cohort = load_participant_metadata(path, cohort="HA")
+        assert out_with_cohort["cohort"] == "HA"
