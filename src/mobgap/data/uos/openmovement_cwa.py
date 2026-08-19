@@ -83,10 +83,11 @@ def _recording_to_dataframe(
     *,
     include_time_index: bool,
 ) -> tuple[pd.DataFrame, float]:
-    """Convert an ``omcwa`` recording into MobGap sensor columns and units."""
-    if out.gyr is None:
-        raise ValueError("CWA recording has no gyroscope data; MobGap requires acc + gyr.")
+    """Convert an ``omcwa`` recording into MobGap sensor columns and units.
 
+    ``out.gyr`` must already be checked non-``None`` by the caller -- see the check
+    immediately after ``process_cwa`` in :func:`load_cwa_as_dataset`.
+    """
     df = pd.DataFrame(
         {
             "acc_x": out.acc[:, 0] * GRAV_MS2,
@@ -102,8 +103,10 @@ def _recording_to_dataframe(
     sampling_rate_hz = float(out.sample_rate_hz)
 
     if include_time_index:
-        # use utc unix seconds as a numeric index. On some hpc stacks
-        # pandas DatetimeIndex and pd.to_datetime(..., unit="s") segfaults, float indices do not.
+        # use unix seconds as a numeric index -- device-clock time, not necessarily UTC (AX3/AX6
+        # loggers are usually set to the local time of the study site and store no offset; see
+        # RecordingTimeline's timezone parameter). On some hpc stacks pandas DatetimeIndex and
+        # pd.to_datetime(..., unit="s") segfault, float indices do not.
         # out.time is float64 already (omcwa's contract, regardless of the acc/gyr dtype).
         df.index = pd.Index(out.time, name="time")
     else:
@@ -158,7 +161,10 @@ def load_cwa_as_dataset(
         Sensor position label used as the key in the dataset sensor dictionary.
     include_time_index
         If True, use a float Unix-time index in seconds from the processed
-        recording. If False, use a :class:`pandas.RangeIndex` (default).
+        recording. If False, use a :class:`pandas.RangeIndex` (default). Set
+        this to True before passing the dataset to
+        :class:`mobgap.aggregation.uos.RecordingTimeline`, which requires a
+        time index and otherwise raises with a pointer back to this parameter.
     resample_hz
         Optional target sampling rate in Hz. When provided, ``omcwa`` resamples
         before constructing the dataset. When omitted, the file default rate is used.
@@ -238,7 +244,9 @@ def load_cwa_as_dataset(
     ``recording_metadata``):
 
     - ``cwa_source_path`` — absolute path to the source ``.cwa`` file
-    - ``cwa_start_time`` — Unix timestamp in seconds of the first processed sample
+    - ``cwa_start_time`` — Unix timestamp in seconds of the first processed
+      sample, on the device clock (usually local time, not UTC -- see
+      ``include_time_index`` above)
     - ``cwa_calibration_success`` — omconvert auto-calibration success flag
     - ``cwa_calibration_error_code`` — omconvert error code (0 on success)
     - ``cwa_calibration_num_axes`` — accelerometer axes that reached the
@@ -292,6 +300,11 @@ def load_cwa_as_dataset(
 
     if out.n_samples == 0:
         raise ValueError("CWA recording produced no samples after processing.")
+
+    # check before any masking work: AX3 recordings have no gyroscope, and there is no point
+    # dropping invalid samples from acc/time only to reject the recording a moment later.
+    if out.gyr is None:
+        raise ValueError("CWA recording has no gyroscope data; MobGap requires acc + gyr.")
 
     invalid_count = int((~out.valid).sum())
     if drop_invalid:

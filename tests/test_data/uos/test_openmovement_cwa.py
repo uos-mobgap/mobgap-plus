@@ -62,15 +62,24 @@ class TestRecordingToDataframe:
         assert not isinstance(df.index, pd.DatetimeIndex)
         np.testing.assert_allclose(df.index, [1_700_000_000.0, 1_700_000_000.01])
 
-    def test_missing_gyro_raises(self):
-        with pytest.raises(ValueError, match="no gyroscope data"):
-            _recording_to_dataframe(_StubProcessedRecording(has_gyro=False), include_time_index=False)
-
 
 class TestLoadCwaAsDataset:
     def test_missing_cwa_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="CWA file not found"):
             load_cwa_as_dataset(tmp_path / "missing.cwa", _PARTICIPANT_METADATA)
+
+    @patch("mobgap.data.uos.openmovement_cwa._import_process_cwa")
+    def test_missing_gyro_raises_before_masking_invalid_samples(self, mock_import_process_cwa, tmp_path):
+        # AX3 recordings have no gyroscope; the check must fire before dropping invalid
+        # samples wastes time masking acc/time for a recording that gets rejected anyway.
+        stub = _StubProcessedRecording(has_gyro=False)
+        stub.valid = np.array([False, True], dtype=np.bool_)
+        mock_import_process_cwa.return_value = MagicMock(return_value=stub)
+        cwa_path = tmp_path / "recording.cwa"
+        cwa_path.write_bytes(b"")
+
+        with pytest.raises(ValueError, match="no gyroscope data"):
+            load_cwa_as_dataset(cwa_path, _PARTICIPANT_METADATA)
 
     @patch("mobgap.data.uos.openmovement_cwa._import_process_cwa")
     def test_builds_dataset_and_forwards_resample(self, mock_import_process_cwa, tmp_path):

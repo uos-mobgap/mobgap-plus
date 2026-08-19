@@ -213,3 +213,15 @@ def test_day_start_hour_outside_the_clock_is_rejected():
     # without the check the day bins silently shift by a whole day and every daily value is wrong
     with pytest.raises(ValueError, match="day_start_hour"):
         MultiGranularAggregator(day_start_hour=24).aggregate(_wb_dmos([0.1], [100.0]), timeline=_timeline())
+
+
+def test_fractional_day_start_hour_is_rejected():
+    # a float boundary breaks the "hourly bins nest exactly 24 per day" invariant equal weighting relies on
+    with pytest.raises(ValueError, match="day_start_hour"):
+        MultiGranularAggregator(day_start_hour=4.5).aggregate(_wb_dmos([0.1], [100.0]), timeline=_timeline())
+
+
+def test_empty_time_bins_is_rejected():
+    # without the check this reaches TIME_BIN_ORDER.index(requested[-1]) with an empty requested tuple
+    with pytest.raises(ValueError, match="time_bins"):
+        MultiGranularAggregator(time_bins=()).aggregate(_wb_dmos([0.1], [100.0]), timeline=_timeline())

@@ -187,10 +187,14 @@ class MultiGranularAggregator(BaseAggregator):
         self.timeline = timeline
         self.wb_dmos_mask = wb_dmos_mask
 
-        if not 0 <= self.day_start_hour < 24:
-            raise ValueError(f"day_start_hour must be between 0 and 23, got {self.day_start_hour}.")
+        is_whole_hour = isinstance(self.day_start_hour, int) and not isinstance(self.day_start_hour, bool)
+        if not (is_whole_hour and 0 <= self.day_start_hour < 24):
+            raise ValueError(f"day_start_hour must be a whole hour between 0 and 23, got {self.day_start_hour!r}.")
 
         requested = self._sorted_time_bins(self.time_bins)
+        if not requested:
+            raise ValueError("time_bins must not be empty. Expected a non-empty subset of ('hour', 'day').")
+
         # equal weighting builds every day from the hourly bins, so the hours are always needed
         ladder = TIME_BIN_ORDER[: TIME_BIN_ORDER.index(requested[-1]) + 1] if self.weighting == "equal" else requested
 
