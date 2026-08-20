@@ -16,9 +16,10 @@ from mobgap.pipeline import MobilisedPipelineHealthy
 dataset = load_cwa_as_dataset(
     "recording.cwa",
     {"height_m": 1.75, "sensor_height_m": 1.0, "cohort": "HA"},
-    recording_metadata={"measurement_condition": "free_living", "timezone": None},
+    recording_metadata={"measurement_condition": "free_living"},
     resample_hz=100.0,
     include_time_index=True,
+    timezone=None,  # the AX3/AX6 clock is already local; set an IANA name if it runs in UTC
 )
 pipeline = MobilisedPipelineHealthy().safe_run(dataset[0])
 
@@ -82,6 +83,11 @@ Three separate pieces, each usable on its own: a timeline, a binning function, a
 drives the upstream one. Nothing in core MobGap is touched, and the nested aggregator is a parameter,
 so a different `BaseAggregator` can be dropped in.
 
+The subpackage stays out of the `mobgap.aggregation` namespace and out of `docs/modules`, the same
+way `mobgap.data.uos` does. Both are UoS additions on a fork, and merging them into the upstream API
+listing would make them look like part of it. Import them from `mobgap.aggregation.uos` and read
+these READMEs, not the rendered API docs.
+
 ### The recording must carry real sample times
 
 Walking bouts carry sample indices. Turning a sample index into a wall-clock time by
@@ -99,14 +105,17 @@ recording reproduces this exactly: a 0.4 s run of invalid samples at the point o
 So `RecordingTimeline.from_datapoint` **requires** a dataset loaded with `include_time_index=True`
 and refuses anything else, rather than silently drifting. A float epoch index is safe to feed through
 the pipeline: `GsIterator` slices positionally with `.iloc`, and `per_wb_parameters_` comes out
-bit-identical with and without it. It costs 8 bytes per sample, about 0.5 GB for a week at 100 Hz.
+bit-identical with and without it, which
+`test_a_float_time_index_does_not_change_what_the_pipeline_computes` checks against the lab example
+data. It costs 8 bytes per sample, about 0.5 GB for a week at 100 Hz.
 
 `RecordingTimeline.from_uniform` remains for synthetic or non-CWA data that is known to be gapless.
 
 ### Time is local wall clock, and naive
 
 Unix timestamps carry no timezone, so the sample clock alone cannot say when midnight was. The
-timeline resolves this with a single `timezone` knob, read from the recording metadata:
+timeline resolves this with a single `timezone` knob, written by
+`load_cwa_as_dataset(timezone=...)` and read back from the recording metadata:
 
 - `None` (default): the recording clock already runs in local time. OpenMovement AX3/AX6 loggers are
 configured with the local time of the study site and never store an offset, so this is the common
@@ -118,8 +127,14 @@ Everything downstream of that conversion works on timezone-naive local timestamp
 a day exactly 24 hours long, keeps hour boundaries on the hour in zones with half-hour offsets, and
 keeps the bin arithmetic trivial. The cost is that the two daylight saving days of the year look
 slightly odd in a converted recording: the spring day holds an hour bin that never happened and is
-therefore empty, and the autumn day holds an hour bin with two hours of data in it. Both are visible
-and neither corrupts a neighbouring bin.
+therefore empty, and the autumn day holds an hour bin with two hours of data in it, reported at a
+coverage of 1 rather than 2. Both are visible and neither corrupts a neighbouring bin.
+
+Keeping that promise takes some care, because the naive local clock runs backwards for an hour at
+the autumn transition. A recording whose last sample falls in the repeated hour ends at a *lower*
+local timestamp than samples it recorded earlier, so deciding which bins hold data cannot be done by
+comparing local labels. `time_bin_grid` and `bin_coverage` both make that decision in epoch seconds
+instead, where the order is never in doubt.
 
 ### Where a day starts
 
@@ -190,6 +205,13 @@ an entire day. A fraction also matches how wear-time validity is normally expres
 Coverage judges **reporting**, not data. Dropping an hour does not remove its walking bouts from its
 day, which is what keeps the totals identical under both weightings and stops the threshold from
 quietly censoring data.
+
+The grid is also the only thing that decides which walking bouts survive, since the aggregated bins
+are reindexed onto it. A bout whose bin is not on the grid would disappear silently, taking its
+counts and totals with it, so `MultiGranularAggregator` raises instead. In practice that means one
+mistake: `RecordingTimeline.from_uniform` believes the `n_samples` it is given, and `timestamps()`
+happily extrapolates past it, so a timeline built for a different or trimmed recording pushes bouts
+off the end. Prefer `from_datapoint`, which reads the sample times from the data itself.
 
 ### Performance
 

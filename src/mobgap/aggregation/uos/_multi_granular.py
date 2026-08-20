@@ -261,6 +261,18 @@ class MultiGranularAggregator(BaseAggregator):
     def _to_grid(self, aggregated: pd.DataFrame, time_bin: TimeBin) -> pd.DataFrame:
         """Put the results on the full bin grid of the recording."""
         grid = time_bin_grid(self.timeline, time_bin, day_start_hour=self.day_start_hour)
+
+        # reindex below would drop these rows and their walking bouts without a word
+        off_grid = aggregated.index.difference(grid)
+        if len(off_grid):
+            raise ValueError(
+                f"{len(off_grid)} {time_bin} bin(s) hold walking bouts but lie outside the recording "
+                f"timeline, the first at {off_grid[0]}. The timeline runs from {self.timeline.start} to "
+                f"{self.timeline.end}, so it does not describe the recording these walking bouts came from. "
+                "Build it with RecordingTimeline.from_datapoint(), or pass the sample count of the very "
+                "same recording to RecordingTimeline.from_uniform()."
+            )
+
         total_columns = [column for column in aggregated.columns if column in TOTAL_COLUMNS]
         total_dtypes = aggregated[total_columns].dtypes.to_dict()
 

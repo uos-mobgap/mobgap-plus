@@ -112,6 +112,42 @@ class TestRecordingTimeline:
             RecordingTimeline.from_datapoint(dataset[0])
 
 
+def test_a_float_time_index_does_not_change_what_the_pipeline_computes():
+    """The whole ``from_datapoint`` design rests on this, and only prose supported it.
+
+    ``include_time_index=True`` replaces the sample-number index with float Unix seconds. If any
+    step of the pipeline read the index as a value rather than slicing it positionally, the DMOs
+    would change and the walking bout ``start`` column would stop being a sample number, which is
+    what :meth:`RecordingTimeline.timestamps` looks up.
+    """
+    from mobgap.data import LabExampleDataset  # noqa: PLC0415
+    from mobgap.pipeline import MobilisedPipelineHealthy  # noqa: PLC0415
+
+    reference = LabExampleDataset().get_subset(cohort="HA", participant_id="001", test="Test11", trial="Trial1")[0]
+    data = reference.data_ss
+
+    def run(index: pd.Index) -> pd.DataFrame:
+        renamed = data.set_axis(index)
+        datapoint = GaitDatasetFromData(
+            {"rec": {"LowerBack": renamed}},
+            reference.sampling_rate_hz,
+            _participant_metadata={"rec": reference.participant_metadata},
+            _recording_metadata={"rec": {"measurement_condition": "laboratory"}},
+            single_sensor_name="LowerBack",
+            index_cols="recording_id",
+        )[0]
+        return MobilisedPipelineHealthy().safe_run(datapoint).per_wb_parameters_
+
+    by_sample = run(pd.RangeIndex(len(data), name="samples"))
+    by_time = run(pd.Index(_START + np.arange(len(data)) / reference.sampling_rate_hz, name="time"))
+
+    assert len(by_sample) > 0
+    # rule_obj holds algorithm instances that compare by identity, so only the numbers can be compared
+    pd.testing.assert_frame_equal(by_sample.select_dtypes("number"), by_time.select_dtypes("number"))
+    # start stays a sample number rather than becoming the epoch value of the index
+    assert by_time["start"].max() < len(data)
+
+
 class TestAddTimeBins:
     def test_bins_are_floored_to_the_local_wall_clock(self):
         timeline = _timeline(hours=24)
@@ -166,6 +202,34 @@ class TestTimeBinGrid:
         timeline = RecordingTimeline.from_uniform(pd.Timestamp("2026-08-17 22:00:00").timestamp(), 7200, 1.0)
 
         assert list(time_bin_grid(timeline, "day")) == [pd.Timestamp("2026-08-17")]
+
+    def test_grid_keeps_the_repeated_hour_when_the_recording_ends_on_a_dst_fallback(self):
+        # 23:00 UTC is 00:00 BST, and the clocks fall back exactly two hours later. The last sample
+        # is at 01:59:59 local, but end_epoch_s converts to 01:00 local, so an end-of-recording
+        # comparison on naive labels would cut the 01:00 bin that holds the final hour of data.
+        start = pd.Timestamp("2023-10-28 23:00:00", tz="UTC").timestamp()
+        timeline = RecordingTimeline.from_sample_times(
+            start + np.arange(2 * 3600), sampling_rate_hz=1.0, timezone="Europe/London"
+        )
+
+        assert timeline.end == pd.Timestamp("2023-10-29 01:00:00")
+        assert list(time_bin_grid(timeline, "hour")) == [
+            pd.Timestamp("2023-10-29 00:00:00"),
+            pd.Timestamp("2023-10-29 01:00:00"),
+        ]
+
+    def test_grid_holds_the_spring_forward_hour_that_never_happened(self):
+        # 2023-03-26: British clocks jump 01:00 -> 02:00, so the 01:00 bin exists on the naive grid
+        # and stays empty. The README documents it as visible rather than missing.
+        start = pd.Timestamp("2023-03-26 00:00:00", tz="UTC").timestamp()
+        timeline = RecordingTimeline.from_sample_times(
+            start + np.arange(4 * 3600), sampling_rate_hz=1.0, timezone="Europe/London"
+        )
+
+        grid = time_bin_grid(timeline, "hour")
+
+        assert pd.Timestamp("2023-03-26 01:00:00") in grid
+        assert bin_coverage(grid, timeline, "hour")[grid == pd.Timestamp("2023-03-26 01:00:00")] == 0.0
 
 
 class TestBinCoverage:

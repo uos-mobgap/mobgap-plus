@@ -221,6 +221,45 @@ def test_fractional_day_start_hour_is_rejected():
         MultiGranularAggregator(day_start_hour=4.5).aggregate(_wb_dmos([0.1], [100.0]), timeline=_timeline())
 
 
+class TestOffGridWalkingBouts:
+    """A bin label the grid does not carry used to vanish, walking bouts included, in ``_to_grid``."""
+
+    def test_a_timeline_shorter_than_the_data_is_rejected(self):
+        # from_uniform takes n_samples on trust and timestamps() extrapolates past it, so a
+        # mismatched timeline silently parked half the bouts outside the grid
+        timeline = _timeline(hours=2.0)
+        wb_dmos = _wb_dmos([0.5, 1.5, 2.5, 3.5], [100.0, 110.0, 120.0, 130.0])
+
+        with pytest.raises(ValueError, match="lie outside the recording timeline"):
+            MultiGranularAggregator().aggregate(wb_dmos, timeline=timeline)
+
+    def test_a_recording_ending_on_a_dst_fallback_keeps_every_bout(self):
+        # the last sample sits at 01:59:59 local while the recording end converts to 01:00 local,
+        # so the 01:00 bin holding the final three bouts used to be missing from the grid
+        start = pd.Timestamp("2023-10-28 23:00:00", tz="UTC").timestamp()
+        n_samples = 2 * 3600
+        timeline = RecordingTimeline.from_sample_times(
+            start + np.arange(n_samples), sampling_rate_hz=1.0, timezone="Europe/London"
+        )
+        starts = np.arange(0, n_samples, 1200)
+        wb_dmos = pd.DataFrame(
+            {
+                "start": starts,
+                "duration_s": np.full(len(starts), 20.0),
+                "cadence_spm": np.full(len(starts), 100.0),
+            },
+            index=pd.Index(range(len(starts)), name="wb_id"),
+        )
+
+        for weighting in ("equal", "pooled"):
+            aggregated = (
+                MultiGranularAggregator(weighting=weighting).aggregate(wb_dmos, timeline=timeline).aggregated_data_
+            )
+
+            assert aggregated.loc["hour", "wb_all__count"].sum() == len(wb_dmos)
+            assert aggregated.loc["day", "wb_all__count"].sum() == len(wb_dmos)
+
+
 def test_empty_time_bins_is_rejected():
     # without the check this reaches TIME_BIN_ORDER.index(requested[-1]) with an empty requested tuple
     with pytest.raises(ValueError, match="time_bins"):

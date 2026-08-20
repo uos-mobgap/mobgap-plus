@@ -339,11 +339,16 @@ def time_bin_grid(timeline: RecordingTimeline, time_bin: TimeBin, *, day_start_h
         Start of every bin the recording overlaps, including bins without any
         walking bout.
     """
+    width = TIME_BIN_WIDTHS[time_bin]
     edges = _floor_to_time_bin(pd.DatetimeIndex([timeline.start, timeline.end]), time_bin, day_start_hour)
-    grid = pd.date_range(edges[0], edges[1], freq=_TIME_BIN_FREQ[time_bin], name="bin_start")
 
-    # a bin starting exactly when the recording ends contains no samples at all
-    return grid[grid < timeline.end]
+    # the naive local clock runs backwards across a daylight saving fall-back, so the last sample can
+    # carry a later bin label than timeline.end does. Overshoot, and let the filter below cut back.
+    grid = pd.date_range(edges[0], edges[1] + 2 * width, freq=_TIME_BIN_FREQ[time_bin], name="bin_start")
+
+    # a bin whose first moment is at or after the end of the recording holds no samples. Comparing
+    # epoch seconds rather than local labels keeps that true across a fall-back.
+    return grid[_to_epoch_s(grid, timeline.timezone) < timeline.end_epoch_s]
 
 
 def bin_coverage(grid: pd.DatetimeIndex, timeline: RecordingTimeline, time_bin: TimeBin) -> np.ndarray:
@@ -372,15 +377,16 @@ def bin_coverage(grid: pd.DatetimeIndex, timeline: RecordingTimeline, time_bin: 
         its coverage is still clipped to 1 rather than reporting ~2.
     """
     width = TIME_BIN_WIDTHS[time_bin]
-    edges = grid.append(pd.DatetimeIndex([grid[-1] + width]))
+    # epoch seconds rather than local labels, so a fall-back bin measures the two hours it holds
+    edge_epoch_s = _to_epoch_s(grid.append(pd.DatetimeIndex([grid[-1] + width])), timeline.timezone)
 
     if timeline.sample_times is None:
         # without measured sample times only the recording ends can cut a bin short
-        starts = np.maximum(edges[:-1].to_numpy(), np.datetime64(timeline.start))
-        ends = np.minimum(edges[1:].to_numpy(), np.datetime64(timeline.end))
-        return np.clip((ends - starts) / np.timedelta64(1, "s") / width.total_seconds(), 0.0, 1.0)
+        starts = np.maximum(edge_epoch_s[:-1], timeline.start_epoch_s)
+        ends = np.minimum(edge_epoch_s[1:], timeline.end_epoch_s)
+        return np.clip((ends - starts) / width.total_seconds(), 0.0, 1.0)
 
     # counting the samples that fall in each bin catches gaps anywhere in the recording
-    samples_per_bin = np.diff(np.searchsorted(timeline.sample_times, _to_epoch_s(edges, timeline.timezone)))
+    samples_per_bin = np.diff(np.searchsorted(timeline.sample_times, edge_epoch_s))
     coverage = samples_per_bin / (width.total_seconds() * timeline.sampling_rate_hz)
     return np.clip(coverage, 0.0, 1.0)
