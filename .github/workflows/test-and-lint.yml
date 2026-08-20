@@ -59,6 +59,30 @@ jobs:
         files: coverage.xml
         token: ${{ secrets.CODECOV_TOKEN }}
 
+  # The default test job syncs without extras, so omcwa is absent and every omcwa test is skipped.
+  # This job is the only place the CWA loader runs against the real omcwa contract rather than
+  # against the hand-written stub in tests/test_data/uos/test_openmovement_cwa.py.
+  test-uos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - name: Install uv and python
+      uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      with:
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+        # omcwa needs 3.11+, and builds from source, so pick one version rather than a matrix
+        python-version: "3.12"
+    - name: Install the project with the uos extra
+      run: uv sync --locked --no-dev --group test --extra uos
+    - name: Fail if omcwa is missing rather than skipping its tests
+      run: uv run --no-sync python -c "import omcwa; print(omcwa.__file__)"
+    - name: Testing the uos extension
+      run: uv run --no-sync pytest tests/test_data/uos tests/test_aggregation/uos --disable-warnings
+
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 5

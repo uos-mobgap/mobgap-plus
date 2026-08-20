@@ -39,11 +39,11 @@ dependencies = [
 
 [project.optional-dependencies]
 uos = [
-    "omcwa; python_version >= '3.11'",
+    "omcwa @ git+https://github.com/uos-mobgap/omcwa@a3f653dc9a10e1629103a08a046b81061f4e650f ; python_version >= '3.11'",
 ]
 
 [tool.uv.sources]
-omcwa = { git = "https://github.com/uos-mobgap/omcwa" }
+omcwa = { git = "https://github.com/uos-mobgap/omcwa", rev = "a3f653dc9a10e1629103a08a046b81061f4e650f" }
 
 [dependency-groups]
 dev = [
