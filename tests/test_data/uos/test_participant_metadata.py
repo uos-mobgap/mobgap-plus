@@ -107,6 +107,16 @@ class TestNormalizeParticipantMetadata:
         out = normalize_participant_metadata(raw, cohort="PD")
         assert out["cohort"] == "PD"
 
+    def test_mobgap_schema_without_cohort_key(self):
+        # cohort is Optional[str] upstream, so requiring the key in one schema and not the other
+        # made the cohort argument unusable for anyone already on MobGap keys
+        out = normalize_participant_metadata({"height_m": 1.75, "sensor_height_m": 1.0})
+        assert out["cohort"] is None
+
+    def test_mobgap_schema_without_cohort_key_takes_the_override(self):
+        out = normalize_participant_metadata({"height_m": 1.75, "sensor_height_m": 1.0}, cohort="PD")
+        assert out["cohort"] == "PD"
+
 
 class TestLoadParticipantMetadata:
     def test_from_dataframe_mobilised_schema(self):
@@ -149,9 +159,6 @@ class TestLoadParticipantMetadata:
             / "001"
             / "infoForAlgo.mat"
         )
-        if not path.is_file():
-            pytest.skip(f"fixture not found: {path}")
-
         out = load_participant_metadata(path)
         assert out["cohort"] is None
         assert out["height_m"] > 0

@@ -11,6 +11,8 @@ Or with pip: ``pip install 'mobgap[uos]'``
 
 from mobgap.data.uos.openmovement_cwa import (
     CalibrationFailurePolicy,
+    CalibrationSource,
+    CwaDtype,
     load_cwa_as_dataset,
 )
 from mobgap.data.uos.participant_metadata import (
@@ -22,6 +24,8 @@ from mobgap.data.uos.participant_metadata import (
 
 __all__ = [
     "CalibrationFailurePolicy",
+    "CalibrationSource",
+    "CwaDtype",
     "ParticipantMetadataSource",
     "convert_mobilised_info_to_participant_metadata",
     "load_cwa_as_dataset",

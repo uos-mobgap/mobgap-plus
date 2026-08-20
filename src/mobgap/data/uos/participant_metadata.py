@@ -17,10 +17,10 @@ from typing import Any, Union
 
 import pandas as pd
 
-_REQUIRED_MOBGAP_KEYS = ("height_m", "sensor_height_m", "cohort")
-_REQUIRED_MOBILISED_KEYS = ("Height", "SensorHeight", "Cohort")
-# Cohort alone is deliberately excluded: Mobilise-D dataset loaders take cohort from the
-# folder/index, not from infoForAlgo.mat, so real files never have this key.
+# the cohort keys are deliberately excluded from both schema probes: Mobilise-D dataset loaders
+# take cohort from the folder/index, not from infoForAlgo.mat, and upstream types it Optional[str],
+# so it arrives through the cohort argument or not at all.
+_MOBGAP_HEIGHT_KEYS = ("height_m", "sensor_height_m")
 _MOBILISED_HEIGHT_KEYS = ("Height", "SensorHeight")
 
 ParticipantMetadataSource = Union[str, Path, Mapping[str, Any], pd.Series, pd.DataFrame]
@@ -86,9 +86,13 @@ def normalize_participant_metadata(raw: Mapping[str, Any], *, cohort: str | None
 
     Accepts either:
 
-    - MobGap keys: ``height_m``, ``sensor_height_m``, ``cohort`` (meters)
-    - Mobilise-D keys: ``Height``, ``SensorHeight`` (centimetres), with ``Cohort``
-      optional -- real ``infoForAlgo.mat`` files do not carry it
+    - MobGap keys: ``height_m``, ``sensor_height_m`` (meters)
+    - Mobilise-D keys: ``Height``, ``SensorHeight`` (centimetres)
+
+    Both schemas treat the cohort as optional, in either its ``cohort`` or its
+    ``Cohort`` spelling. Real ``infoForAlgo.mat`` files do not carry it, and
+    upstream types it ``Optional[str]``. A missing, blank, or ``NaN`` cohort
+    comes back as ``None`` rather than as the string ``"None"``/``"nan"``.
 
     Extra keys are preserved. Mobilise-D optional fields are mapped to the same
     names used by :class:`mobgap.data.MobilisedParticipantMetadata`.
@@ -102,7 +106,7 @@ def normalize_participant_metadata(raw: Mapping[str, Any], *, cohort: str | None
         ``Cohort``/``cohort`` value. Takes precedence over ``raw`` when given.
     """
     keys = set(raw)
-    has_mobgap = {"height_m", "sensor_height_m", "cohort"} <= keys
+    has_mobgap = set(_MOBGAP_HEIGHT_KEYS) <= keys
     has_mobilised = set(_MOBILISED_HEIGHT_KEYS) <= keys
 
     # prefer mobgap schema when present so mixed tables do not double-convert
@@ -110,8 +114,8 @@ def normalize_participant_metadata(raw: Mapping[str, Any], *, cohort: str | None
         if has_mobilised:
             warnings.warn(
                 "participant_metadata contains both MobGap keys "
-                f"{list(_REQUIRED_MOBGAP_KEYS)} and Mobilise-D keys "
-                f"{list(_REQUIRED_MOBILISED_KEYS)}. "
+                f"{list(_MOBGAP_HEIGHT_KEYS)} and Mobilise-D keys "
+                f"{list(_MOBILISED_HEIGHT_KEYS)}. "
                 "Using the MobGap values (metres) and ignoring Mobilise-D "
                 "Height/SensorHeight/Cohort (centimetres).",
                 UserWarning,
@@ -120,18 +124,18 @@ def normalize_participant_metadata(raw: Mapping[str, Any], *, cohort: str | None
         result = dict(raw)
         result["height_m"] = float(result["height_m"])
         result["sensor_height_m"] = float(result["sensor_height_m"])
-        raw_cohort = cohort if cohort is not None else result["cohort"]
+        raw_cohort = cohort if cohort is not None else result.get("cohort")
         result["cohort"] = None if pd.isna(raw_cohort) else str(raw_cohort)
         return result
 
     if has_mobilised:
         return convert_mobilised_info_to_participant_metadata(raw, cohort=cohort)
 
-    missing_mobgap = [key for key in _REQUIRED_MOBGAP_KEYS if key not in keys]
+    missing_mobgap = [key for key in _MOBGAP_HEIGHT_KEYS if key not in keys]
     missing_mobilised = [key for key in _MOBILISED_HEIGHT_KEYS if key not in keys]
     raise ValueError(
         "participant_metadata must use MobGap keys "
-        f"{list(_REQUIRED_MOBGAP_KEYS)} (meters) or Mobilise-D keys "
+        f"{list(_MOBGAP_HEIGHT_KEYS)} (meters) or Mobilise-D keys "
         f"{list(_MOBILISED_HEIGHT_KEYS)} (centimetres). "
         f"Missing MobGap keys: {missing_mobgap}; "
         f"missing Mobilise-D keys: {missing_mobilised}."

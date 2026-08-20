@@ -128,6 +128,37 @@ class TestLoadCwaAsDataset:
         assert datapoint.recording_metadata["cwa_invalid_samples_dropped"] == 0
 
     @patch("mobgap.data.uos.openmovement_cwa._import_process_cwa")
+    def test_timezone_reaches_the_recording_timeline(self, mock_import_process_cwa, tmp_path):
+        # the timezone is only reachable by the aggregator through this metadata key, so the two
+        # halves of the extension are wired together by the string "timezone" and nothing else
+        from mobgap.aggregation.uos import RecordingTimeline  # noqa: PLC0415
+
+        mock_import_process_cwa.return_value = MagicMock(return_value=_StubProcessedRecording())
+        cwa_path = tmp_path / "recording.cwa"
+        cwa_path.write_bytes(b"")
+
+        dataset = load_cwa_as_dataset(
+            cwa_path,
+            _PARTICIPANT_METADATA,
+            include_time_index=True,
+            timezone="Europe/London",
+        )
+        datapoint = dataset[0]
+
+        assert datapoint.recording_metadata["timezone"] == "Europe/London"
+        assert RecordingTimeline.from_datapoint(datapoint).timezone == "Europe/London"
+
+    @patch("mobgap.data.uos.openmovement_cwa._import_process_cwa")
+    def test_no_timezone_key_when_the_clock_is_already_local(self, mock_import_process_cwa, tmp_path):
+        mock_import_process_cwa.return_value = MagicMock(return_value=_StubProcessedRecording())
+        cwa_path = tmp_path / "recording.cwa"
+        cwa_path.write_bytes(b"")
+
+        dataset = load_cwa_as_dataset(cwa_path, _PARTICIPANT_METADATA)
+
+        assert "timezone" not in dataset[0].recording_metadata
+
+    @patch("mobgap.data.uos.openmovement_cwa._import_process_cwa")
     def test_empty_processed_recording_raises(self, mock_import_process_cwa, tmp_path):
         stub = _StubProcessedRecording()
         stub.time = np.array([], dtype=np.float64)

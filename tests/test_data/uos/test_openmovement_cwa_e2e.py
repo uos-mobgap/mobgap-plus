@@ -64,9 +64,9 @@ def test_load_cwa_as_dataset_processes_golden_fixture(cal_success_cwa: Path) -> 
 def test_drop_invalid_samples_with_real_processed_recording(cal_success_cwa: Path) -> None:
     """``_drop_invalid_samples`` must handle a real ``omcwa.ProcessedRecording``, not just the test stub.
 
-    ``ProcessedRecording`` cannot be reconstructed with a masked ``time`` array (omcwa derives
-    ``time`` from ``start_time``/``n_samples`` internally) -- this only exercises that contract
-    when omconvert actually marks samples invalid, which the golden fixture never does on its own.
+    ``ProcessedRecording.time`` is a ``cached_property`` over ``start_time``/``n_samples``, so this
+    is the only test that proves masking it works on the real type. The golden fixture never has
+    omconvert mark a sample invalid, hence the forced flags.
     """
     from omcwa import process_cwa  # noqa: PLC0415
 

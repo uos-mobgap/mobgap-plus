@@ -30,15 +30,15 @@ CwaDtype = Literal["float64", "float32"]
 class _MaskedRecording:
     """The subset of ``ProcessedRecording`` fields still needed once invalid samples are dropped.
 
-    ``ProcessedRecording`` is not reconstructable with a boolean-masked ``time`` array (omcwa
-    derives ``time`` from ``start_time``/``n_samples`` internally), and ``valid``/``clipped``/
-    ``metadata`` are never read again after masking, so this avoids both problems.
+    omcwa can carry a non-uniform timeline itself (``ProcessedRecording.time_override``), but
+    ``valid``, ``clipped``, and ``metadata`` are never read again after masking, and masking them
+    costs two full-size copies: 120 MB on a week at 100 Hz. So this keeps only what is left.
     """
 
     sample_rate_hz: float
     time: np.ndarray
     acc: np.ndarray
-    gyr: Optional[np.ndarray]
+    gyr: np.ndarray
     calibration: Any
 
     @property
@@ -58,24 +58,22 @@ def _import_process_cwa() -> Any:
     return process_cwa
 
 
-def _drop_invalid_samples(out: "ProcessedRecording") -> tuple[Union["ProcessedRecording", _MaskedRecording], int]:
-    """Return a copy of ``out`` with omconvert-invalid samples removed."""
-    invalid_count = int((~out.valid).sum())
-    if invalid_count == 0:
-        return out, 0
+def _drop_invalid_samples(out: "ProcessedRecording", invalid_count: int) -> _MaskedRecording:
+    """Return ``out`` with the omconvert-invalid samples removed.
 
-    if not np.any(out.valid):
+    ``out.gyr`` is already known non-``None`` here, see the check right after ``process_cwa``.
+    """
+    if invalid_count == out.valid.size:
         raise ValueError("CWA recording has no valid samples after processing.")
 
     mask = out.valid
-    filtered = _MaskedRecording(
+    return _MaskedRecording(
         sample_rate_hz=out.sample_rate_hz,
         time=out.time[mask],
         acc=out.acc[mask],
-        gyr=None if out.gyr is None else out.gyr[mask],
+        gyr=out.gyr[mask],
         calibration=out.calibration,
     )
-    return filtered, invalid_count
 
 
 def _recording_to_dataframe(
@@ -122,6 +120,7 @@ def load_cwa_as_dataset(
     *,
     sensor_position: str = "LowerBack",
     include_time_index: bool = False,
+    timezone: Optional[str] = None,
     resample_hz: Optional[float] = None,
     calibrate: bool = True,
     on_calibration_failure: CalibrationFailurePolicy = "raise",
@@ -146,13 +145,14 @@ def load_cwa_as_dataset(
     participant_metadata
         Participant metadata required by mobgap pipelines. Accepted forms:
 
-        - mapping / ``dict`` with MobGap keys ``height_m``, ``sensor_height_m``,
-          ``cohort`` (meters), or Mobilise-D keys ``Height``, ``SensorHeight``,
-          ``Cohort`` (centimetres)
+        - mapping / ``dict`` with MobGap keys ``height_m``, ``sensor_height_m``
+          (meters), or Mobilise-D keys ``Height``, ``SensorHeight`` (centimetres)
         - :class:`pandas.Series` / :class:`pandas.DataFrame` (first row)
         - path to a Mobilise-D ``infoForAlgo.mat`` or a ``.csv`` with either schema
 
-        All forms are normalised by :func:`mobgap.data.uos.load_participant_metadata`.
+        The cohort is optional in both schemas, spelled ``cohort`` or
+        ``Cohort``, and can also come from ``metadata_cohort`` below. All forms
+        are normalised by :func:`mobgap.data.uos.load_participant_metadata`.
     recording_metadata
         Optional recording metadata merged with CWA-derived fields listed in
         ``Notes`` below. User-supplied keys are preserved. Adapter keys are
@@ -165,6 +165,14 @@ def load_cwa_as_dataset(
         this to True before passing the dataset to
         :class:`mobgap.aggregation.uos.RecordingTimeline`, which requires a
         time index and otherwise raises with a pointer back to this parameter.
+    timezone
+        IANA timezone name of the study site, stored as the ``timezone``
+        recording metadata key and read from there by
+        :meth:`mobgap.aggregation.uos.RecordingTimeline.from_datapoint`. Leave
+        at ``None`` (default) when the logger clock already runs in local time,
+        which is how AX3/AX6 devices are normally configured. Set it only when
+        the clock runs in UTC and the wall-clock bins should follow local time,
+        daylight saving included.
     resample_hz
         Optional target sampling rate in Hz. When provided, ``omcwa`` resamples
         before constructing the dataset. When omitted, the file default rate is used.
@@ -199,7 +207,10 @@ def load_cwa_as_dataset(
         precedence over any cohort present in ``participant_metadata``.
         Mobilise-D dataset loaders take cohort from the folder/dataset index
         rather than ``infoForAlgo.mat`` itself, so a real ``.mat`` source
-        usually needs this to end up with a non-``None`` cohort.
+        usually needs this to end up with a non-``None`` cohort. A ``None``
+        cohort reaches the pipelines as ``None``, where
+        :class:`~mobgap.pipeline.MobilisedPipelineHealthy` rejects it unless
+        ``dmo_thresholds`` is also ``None``.
     dtype
         Output precision for ``acc``/``gyr``. ``"float64"`` (default) matches
         every consumer today. ``"float32"`` halves resample memory; per
@@ -233,7 +244,7 @@ def load_cwa_as_dataset(
 
     Or: ``pip install 'mobgap[uos]'``
 
-    Output units: accelerometer columns are in m/s^2, gyroscope columns are 
+    Output units: accelerometer columns are in m/s^2, gyroscope columns are
     in deg/s. Column names follow :data:`mobgap.consts.SF_SENSOR_COLS`.
 
     Sensor requirement: MobGap requires accelerometer and gyroscope data.
@@ -256,6 +267,9 @@ def load_cwa_as_dataset(
     - ``cwa_invalid_samples`` — count of invalid samples before optional dropping
     - ``cwa_invalid_samples_dropped`` — invalid samples removed when
       ``drop_invalid=True`` (0 when ``drop_invalid=False``)
+    - ``timezone`` — the ``timezone`` argument above, added only when it is not
+      ``None``, and read by
+      :meth:`mobgap.aggregation.uos.RecordingTimeline.from_datapoint`
 
     For resampling algorithm details, calibration behaviour, and failure codes,
     see the ``omcwa`` documentation.
@@ -306,11 +320,12 @@ def load_cwa_as_dataset(
     if out.gyr is None:
         raise ValueError("CWA recording has no gyroscope data; MobGap requires acc + gyr.")
 
-    invalid_count = int((~out.valid).sum())
-    if drop_invalid:
-        out, dropped_invalid = _drop_invalid_samples(out)
-    else:
-        dropped_invalid = 0
+    # out.valid.size - sum, rather than (~out.valid).sum(), to skip a full-size inverted copy
+    invalid_count = out.valid.size - int(out.valid.sum())
+    dropped_invalid = 0
+    if drop_invalid and invalid_count:
+        out = _drop_invalid_samples(out, invalid_count)
+        dropped_invalid = invalid_count
 
     sensor_df, sampling_rate_hz = _recording_to_dataframe(out, include_time_index=include_time_index)
 
@@ -320,6 +335,8 @@ def load_cwa_as_dataset(
     recording_meta.setdefault("cwa_start_time", out.first_sample_time)
     recording_meta.setdefault("cwa_invalid_samples", invalid_count)
     recording_meta.setdefault("cwa_invalid_samples_dropped", dropped_invalid)
+    if timezone is not None:
+        recording_meta.setdefault("timezone", timezone)
 
     recording_meta.setdefault("cwa_calibration_success", out.calibration.success)
     recording_meta.setdefault("cwa_calibration_error_code", out.calibration.error_code)
