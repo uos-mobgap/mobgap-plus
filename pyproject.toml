@@ -37,6 +37,14 @@ dependencies = [
     "seaborn>=0.12.0",
 ]
 
+[project.optional-dependencies]
+uos = [
+    "omcwa @ git+https://github.com/uos-mobgap/omcwa@a3f653dc9a10e1629103a08a046b81061f4e650f ; python_version >= '3.11'",
+]
+
+[tool.uv.sources]
+omcwa = { git = "https://github.com/uos-mobgap/omcwa", rev = "a3f653dc9a10e1629103a08a046b81061f4e650f" }
+
 [dependency-groups]
 dev = [
     { include-group = "test" },
@@ -72,6 +80,9 @@ docs = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.poe.tasks]
 _format = "ruff format ."
