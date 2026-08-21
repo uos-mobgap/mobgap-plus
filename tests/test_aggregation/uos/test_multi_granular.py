@@ -178,7 +178,7 @@ class TestNestedAggregator:
         assert day["cadence_all_avg"] == pytest.approx((105.0 + 130.0) / 2)
 
     def test_every_aggregated_column_is_classified(self):
-        # a column that is neither a known total nor a known average would silently be averaged
+        # a column that is neither a known total nor a known average would be averaged without a warning
         full_wb_dmos = _wb_dmos([0.1, 0.2], [100.0, 110.0]).assign(
             n_raw_initial_contacts=30,
             n_turns=2,
@@ -204,13 +204,13 @@ class TestNestedAggregator:
 
 
 def test_unknown_weighting_is_rejected():
-    # without the check a misspelled weighting silently falls through to pooled and returns wrong averages
+    # without the check a misspelled weighting falls through to pooled and returns wrong averages
     with pytest.raises(ValueError, match="Unknown weighting"):
         MultiGranularAggregator(weighting="mean").aggregate(_wb_dmos([0.1], [100.0]), timeline=_timeline())
 
 
 def test_day_start_hour_outside_the_clock_is_rejected():
-    # without the check the day bins silently shift by a whole day and every daily value is wrong
+    # without the check the day bins shift by a whole day and every daily value is wrong
     with pytest.raises(ValueError, match="day_start_hour"):
         MultiGranularAggregator(day_start_hour=24).aggregate(_wb_dmos([0.1], [100.0]), timeline=_timeline())
 
@@ -225,8 +225,8 @@ class TestOffGridWalkingBouts:
     """A bin label the grid does not carry used to vanish, walking bouts included, in ``_to_grid``."""
 
     def test_a_timeline_shorter_than_the_data_is_rejected(self):
-        # from_uniform takes n_samples on trust and timestamps() extrapolates past it, so a
-        # mismatched timeline silently parked half the bouts outside the grid
+        # from_uniform takes n_samples on trust and timestamps() computes times past it, so a
+        # mismatched timeline parked half the bouts outside the grid without an error
         timeline = _timeline(hours=2.0)
         wb_dmos = _wb_dmos([0.5, 1.5, 2.5, 3.5], [100.0, 110.0, 120.0, 130.0])
 

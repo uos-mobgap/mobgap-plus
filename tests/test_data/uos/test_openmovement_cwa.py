@@ -70,7 +70,7 @@ class TestLoadCwaAsDataset:
 
     @patch("mobgap.data.uos.openmovement_cwa._import_process_cwa")
     def test_missing_gyro_raises_before_masking_invalid_samples(self, mock_import_process_cwa, tmp_path):
-        # AX3 recordings have no gyroscope; the check must fire before dropping invalid
+        # AX3 recordings have no gyroscope. The check must fire before dropping invalid
         # samples wastes time masking acc/time for a recording that gets rejected anyway.
         stub = _StubProcessedRecording(has_gyro=False)
         stub.valid = np.array([False, True], dtype=np.bool_)

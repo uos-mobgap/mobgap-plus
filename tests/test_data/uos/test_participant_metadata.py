@@ -149,7 +149,7 @@ class TestLoadParticipantMetadata:
         assert out["cohort"] is None
 
     def test_real_infoforalgo_mat_without_cohort(self):
-        """Real Mobilise-D infoForAlgo.mat files carry no Cohort key at all (it lives in the folder/index)."""
+        """Real Mobilise-D infoForAlgo.mat files carry no Cohort key. It lives in the folder/index."""
         path = (
             Path(__file__).resolve().parents[2]
             / "test_data"

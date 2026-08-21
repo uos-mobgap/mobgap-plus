@@ -64,9 +64,9 @@ class MultiGranularAggregator(BaseAggregator):
     Bins the recording reaches into but that hold no walking bout are part of
     the result, with counts and totals of zero and averages of ``NaN``.
 
-    The ``weighting`` decides how a walking bout is weighted within a day. It
-    only ever moves averages, percentiles, and coefficients of variation, counts
-    and totals are the same under both weightings.
+    The ``weighting`` decides how a walking bout is weighted within a day.
+    Only averages, percentiles, and coefficients of variation change.
+    Counts and totals are the same under both weightings.
 
     Parameters
     ----------
@@ -84,13 +84,13 @@ class MultiGranularAggregator(BaseAggregator):
         :class:`~mobgap.aggregation.MobilisedAggregator` does on its own and what
         the original Mobilise-D aggregation does.
     min_coverage
-        Smallest fraction of a bin that the recording must hold samples for. At
-        the default of 0 every bin the recording reaches into is reported, at 1
-        only bins covered from their first to their last moment are. Values in
-        between tolerate the samples a recording loses to logger dropouts, in
-        the spirit of a minimum wear time. The coverage itself is reported in
-        the ``coverage`` column, and dropping a bin never removes its walking
-        bouts from a coarser bin.
+        Smallest fraction of a bin that the recording must hold samples for.
+        The default of 0 reports every bin the recording reaches into.
+        A value of 1 keeps only bins covered from their first to their last
+        moment. Values in between tolerate samples lost to logger dropouts,
+        like a minimum wear time. The coverage itself is reported in the
+        ``coverage`` column. Dropping a bin never removes its walking bouts
+        from a coarser bin.
     day_start_hour
         Hour of the local clock at which a day starts, from 0 to 23. Whole hours
         only, so that hourly bins always nest exactly 24 per day.
@@ -119,15 +119,16 @@ class MultiGranularAggregator(BaseAggregator):
     Notes
     -----
     Under ``"equal"`` weighting a daily statistic is the average of the hourly
-    ones, which is only the same question for plain averages. The average of the
-    hourly 90th percentiles is not the daily 90th percentile, and the average of
-    the hourly coefficients of variation describes the within-hour variability
-    rather than the within-day one. Request the hourly bin in the same call,
-    which costs nothing extra, to see how many hours a daily value rests on.
+    ones. That is the same question only for plain averages. The average of the
+    hourly 90th percentiles is not the daily 90th percentile. The average of
+    the hourly coefficients of variation describes variability inside each
+    hour, not across the day. Request the hourly bin in the same call to see
+    how many hours a daily value is computed from. That adds no extra pipeline
+    work.
 
     Counts and totals are zero rather than missing whenever nothing was
     observed. :class:`~mobgap.aggregation.MobilisedAggregator` leaves
-    ``wb_1030_sum`` missing in that case, this class reports it as zero so that
+    ``wb_1030_sum`` missing in that case. This class reports it as zero so that
     all counts behave the same.
     """
 
@@ -262,12 +263,12 @@ class MultiGranularAggregator(BaseAggregator):
         """Put the results on the full bin grid of the recording."""
         grid = time_bin_grid(self.timeline, time_bin, day_start_hour=self.day_start_hour)
 
-        # reindex below would drop these rows and their walking bouts without a word
+        # reindex below would drop these rows and their walking bouts without an error
         off_grid = aggregated.index.difference(grid)
         if len(off_grid):
             raise ValueError(
                 f"{len(off_grid)} {time_bin} bin(s) hold walking bouts but lie outside the recording "
-                f"timeline, the first at {off_grid[0]}. The timeline runs from {self.timeline.start} to "
+                f"timeline. The first is at {off_grid[0]}. The timeline runs from {self.timeline.start} to "
                 f"{self.timeline.end}, so it does not describe the recording these walking bouts came from. "
                 "Build it with RecordingTimeline.from_datapoint(), or pass the sample count of the very "
                 "same recording to RecordingTimeline.from_uniform()."
@@ -277,7 +278,7 @@ class MultiGranularAggregator(BaseAggregator):
         total_dtypes = aggregated[total_columns].dtypes.to_dict()
 
         aggregated = aggregated.reindex(grid)
-        # nothing observed in a bin means a count of zero
+        # Nothing observed in a bin means a count of zero.
         aggregated[total_columns] = aggregated[total_columns].fillna(0).astype(total_dtypes)
 
         return aggregated
@@ -285,8 +286,8 @@ class MultiGranularAggregator(BaseAggregator):
     def _report(self, aggregated: pd.DataFrame, time_bin: TimeBin) -> pd.DataFrame:
         """Add the coverage of every bin and drop the ones below ``min_coverage``.
 
-        Bins are judged on their own coverage only, so a dropped hour still
-        counts towards its day and the totals stay the same under both
+        Bins are judged on their own coverage only. A dropped hour still
+        counts towards its day. The totals stay the same under both
         weightings.
         """
         coverage = bin_coverage(aggregated.index, self.timeline, time_bin)

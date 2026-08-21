@@ -2,7 +2,7 @@
 
 This subpackage is maintained by UoS-MobGap and is not part of upstream MobGap.
 
-Install (recommended: uv — https://docs.astral.sh/uv/):
+Install with uv (https://docs.astral.sh/uv/), which is the recommended tool:
 
     uv sync --extra uos
 

@@ -17,9 +17,9 @@ from typing import Any, Union
 
 import pandas as pd
 
-# the cohort keys are deliberately excluded from both schema probes: Mobilise-D dataset loaders
-# take cohort from the folder/index, not from infoForAlgo.mat, and upstream types it Optional[str],
-# so it arrives through the cohort argument or not at all.
+# The cohort keys are deliberately excluded from both schema probes.
+# Mobilise-D dataset loaders take cohort from the folder/index, not from infoForAlgo.mat.
+# Upstream types it Optional[str], so it arrives through the cohort argument or not at all.
 _MOBGAP_HEIGHT_KEYS = ("height_m", "sensor_height_m")
 _MOBILISED_HEIGHT_KEYS = ("Height", "SensorHeight")
 
@@ -54,9 +54,9 @@ def convert_mobilised_info_to_participant_metadata(
             f"{missing}. Expected Height and SensorHeight (cm)."
         )
 
-    # mobilised-d dataset loaders often take cohort from the index instead, so
-    # meta_data typically has no Cohort key at all; pd.isna also catches an
-    # explicit None and an empty-CSV-cell NaN, none of which should become "None"/"nan".
+    # Mobilise-D dataset loaders often take cohort from the index instead, so
+    # meta_data typically has no Cohort key at all. pd.isna also catches an
+    # explicit None and an empty-CSV-cell NaN. None of those should become "None"/"nan".
     raw_cohort = cohort if cohort is not None else meta_data.get("Cohort")
     cohort_value = None if pd.isna(raw_cohort) else str(raw_cohort)
 
@@ -86,7 +86,7 @@ def normalize_participant_metadata(raw: Mapping[str, Any], *, cohort: str | None
 
     Accepts either:
 
-    - MobGap keys: ``height_m``, ``sensor_height_m`` (meters)
+    - MobGap keys: ``height_m``, ``sensor_height_m`` (metres)
     - Mobilise-D keys: ``Height``, ``SensorHeight`` (centimetres)
 
     Both schemas treat the cohort as optional, in either its ``cohort`` or its
@@ -109,7 +109,7 @@ def normalize_participant_metadata(raw: Mapping[str, Any], *, cohort: str | None
     has_mobgap = set(_MOBGAP_HEIGHT_KEYS) <= keys
     has_mobilised = set(_MOBILISED_HEIGHT_KEYS) <= keys
 
-    # prefer mobgap schema when present so mixed tables do not double-convert
+    # Prefer the MobGap schema when present so mixed tables do not convert twice.
     if has_mobgap:
         if has_mobilised:
             warnings.warn(
@@ -135,10 +135,10 @@ def normalize_participant_metadata(raw: Mapping[str, Any], *, cohort: str | None
     missing_mobilised = [key for key in _MOBILISED_HEIGHT_KEYS if key not in keys]
     raise ValueError(
         "participant_metadata must use MobGap keys "
-        f"{list(_MOBGAP_HEIGHT_KEYS)} (meters) or Mobilise-D keys "
+        f"{list(_MOBGAP_HEIGHT_KEYS)} (metres) or Mobilise-D keys "
         f"{list(_MOBILISED_HEIGHT_KEYS)} (centimetres). "
-        f"Missing MobGap keys: {missing_mobgap}; "
-        f"missing Mobilise-D keys: {missing_mobilised}."
+        f"Missing MobGap keys: {missing_mobgap}. "
+        f"Missing Mobilise-D keys: {missing_mobilised}."
     )
 
 
@@ -232,5 +232,5 @@ def load_participant_metadata(
 
     raise TypeError(
         "participant_metadata must be a mapping, pandas Series/DataFrame, "
-        f"or path to a .mat/.csv file; got {type(source)!r}."
+        f"or path to a .mat/.csv file. Got {type(source)!r}."
     )

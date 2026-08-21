@@ -58,8 +58,8 @@ class TestRecordingTimeline:
         assert timeline.sampling_rate_hz == pytest.approx(1.0)
 
     def test_sample_times_infers_rate_from_the_median_interval_despite_a_leading_gap(self):
-        # an isolated first sample followed by a dropout would make the naive sample_times[1]
-        # - sample_times[0] interval look like the whole gap, not the true 100 Hz sampling rate
+        # an isolated first sample followed by a dropout would make the first interval
+        # sample_times[1] - sample_times[0] look like the whole gap, not the true 100 Hz sampling rate
         rest = _START + 500.0 + np.arange(3 * 60 * 100) / 100.0
         sample_times = np.concatenate([[_START], rest])
 
@@ -76,7 +76,7 @@ class TestRecordingTimeline:
         assert timeline.sampling_rate_hz == 100.0
 
     def test_from_datapoint_uses_the_dataset_sampling_rate_not_inference(self):
-        # the leading gap in the index would make naive inference from two samples wildly wrong
+        # the leading gap in the index would make a two-sample rate estimate wildly wrong
         rest = _START + 500.0 + np.arange(3 * 60 * 100) / 100.0
         sample_times = np.concatenate([[_START], rest])
         dataset = _dataset(pd.Index(sample_times, name="time"), {})
@@ -113,7 +113,7 @@ class TestRecordingTimeline:
 
 
 def test_a_float_time_index_does_not_change_what_the_pipeline_computes():
-    """The whole ``from_datapoint`` design rests on this, and only prose supported it.
+    """``from_datapoint`` is only safe if this holds. Until this test, only the README said it did.
 
     ``include_time_index=True`` replaces the sample-number index with float Unix seconds. If any
     step of the pipeline read the index as a value rather than slicing it positionally, the DMOs
@@ -206,7 +206,8 @@ class TestTimeBinGrid:
     def test_grid_keeps_the_repeated_hour_when_the_recording_ends_on_a_dst_fallback(self):
         # 23:00 UTC is 00:00 BST, and the clocks fall back exactly two hours later. The last sample
         # is at 01:59:59 local, but end_epoch_s converts to 01:00 local, so an end-of-recording
-        # comparison on naive labels would cut the 01:00 bin that holds the final hour of data.
+        # comparison on local labels with no timezone would cut the 01:00 bin that holds
+        # the final hour of data.
         start = pd.Timestamp("2023-10-28 23:00:00", tz="UTC").timestamp()
         timeline = RecordingTimeline.from_sample_times(
             start + np.arange(2 * 3600), sampling_rate_hz=1.0, timezone="Europe/London"
@@ -219,7 +220,7 @@ class TestTimeBinGrid:
         ]
 
     def test_grid_holds_the_spring_forward_hour_that_never_happened(self):
-        # 2023-03-26: British clocks jump 01:00 -> 02:00, so the 01:00 bin exists on the naive grid
+        # 2023-03-26: British clocks jump 01:00 -> 02:00, so the 01:00 bin exists on the local grid
         # and stays empty. The README documents it as visible rather than missing.
         start = pd.Timestamp("2023-03-26 00:00:00", tz="UTC").timestamp()
         timeline = RecordingTimeline.from_sample_times(
@@ -274,7 +275,7 @@ class TestBinCoverage:
 
     def test_dst_fallback_hour_is_clipped_to_1_not_2(self):
         # 2023-10-29: British clocks fall back at 02:00 BST -> 01:00 GMT, so local 01:00-01:59
-        # occurs twice -- a gapless recording puts two hours of samples under that one label
+        # occurs twice. A gapless recording puts two hours of samples under that one label.
         start = pd.Timestamp("2023-10-29 00:00:00", tz="UTC").timestamp()
         full = start + np.arange(3 * 3600)
         timeline = RecordingTimeline.from_sample_times(full, sampling_rate_hz=1.0, timezone="Europe/London")

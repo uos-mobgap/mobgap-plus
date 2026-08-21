@@ -4,8 +4,8 @@ UoS-MobGap extension.
 
 Walking bouts carry sample indices. This module turns those sample indices into
 local wall-clock timestamps and floors them to hour and day bins.
-All timestamps produced here are timezone-naive local wall-clock,
-so a day is always exactly 24 hours long.
+The timestamps have no timezone attached. A day is always exactly
+24 hours long.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ _EPOCH: Final = pd.Timestamp("1970-01-01")
 
 
 def _to_local_time(epoch_s: np.ndarray, timezone: str | None) -> pd.DatetimeIndex:
-    """Convert Unix epoch seconds to timezone-naive local wall-clock timestamps."""
+    """Convert Unix epoch seconds to local wall-clock timestamps with no timezone attached."""
     times = pd.to_datetime(epoch_s, unit="s")
     if timezone is None:
         return times
@@ -45,11 +45,12 @@ def _to_local_time(epoch_s: np.ndarray, timezone: str | None) -> pd.DatetimeInde
 
 
 def _to_epoch_s(times: pd.DatetimeIndex, timezone: str | None) -> np.ndarray:
-    """Convert timezone-naive local wall-clock timestamps back to Unix epoch seconds."""
+    """Convert local wall-clock timestamps with no timezone back to Unix epoch seconds."""
     if timezone is None:
         return ((times - _EPOCH) / pd.Timedelta(1, "s")).to_numpy()
 
-    # a local time that daylight saving skipped moves forward, a repeated one takes its first pass
+    # a local time that daylight saving skipped is moved forward
+    # a repeated local time takes its first pass
     utc = times.tz_localize(timezone, ambiguous=True, nonexistent="shift_forward").tz_convert("UTC")
     return ((utc.tz_localize(None) - _EPOCH) / pd.Timedelta(1, "s")).to_numpy()
 
@@ -59,7 +60,7 @@ def _floor_to_time_bin(times: pd.DatetimeIndex, time_bin: TimeBin, day_start_hou
     if time_bin == "hour":
         return times.floor("h")
 
-    # shift the day boundary onto midnight, floor there, and shift back
+    # Shift so the day starts at midnight, round down, then shift back.
     offset = pd.Timedelta(hours=day_start_hour)
     return (times - offset).normalize() + offset
 
@@ -73,12 +74,12 @@ class RecordingTimeline:
     samples for. Use one of the constructors rather than instantiating directly.
 
     Recordings are stored as Unix epoch seconds, which carry no timezone. The
-    ``timezone`` decides how those seconds are read:
+    ``timezone`` argument decides how those seconds are read:
 
-    - ``None`` (default): the clock already runs in local time. This is the
+    - ``None`` (default). The clock already runs in local time. This is the
       case for OpenMovement AX3/AX6 loggers, which are configured with the
       local time of the study site and never store an offset.
-    - An IANA name such as ``"Europe/London"``: the clock runs in UTC and is
+    - An IANA name such as ``"Europe/London"``. The clock runs in UTC and is
       converted to local wall clock, including daylight saving time.
 
     Parameters
@@ -128,8 +129,8 @@ class RecordingTimeline:
         """Build a timeline for a gapless recording.
 
         Sample ``i`` is assumed to be recorded at ``start_epoch_s + i / sampling_rate_hz``.
-        A recording that lost samples breaks that assumption and this timeline
-        cannot detect it, so use :meth:`from_sample_times` for measured data.
+        A recording that lost samples breaks that assumption. This timeline
+        cannot detect that. Use :meth:`from_sample_times` for measured data.
 
         Parameters
         ----------
@@ -165,9 +166,9 @@ class RecordingTimeline:
     ) -> RecordingTimeline:
         """Build a timeline from the timestamp of every sample.
 
-        This is exact even when samples are missing from the recording, because
-        every walking bout is placed by looking up the time of its start sample,
-        and it lets :func:`bin_coverage` see the resulting gaps.
+        This is exact even when samples are missing from the recording. Every
+        walking bout is placed by looking up the time of its start sample.
+        :func:`bin_coverage` can then see the resulting gaps.
 
         Parameters
         ----------
@@ -175,10 +176,10 @@ class RecordingTimeline:
             Unix timestamps in seconds, one per sample, in recording order.
         sampling_rate_hz
             The recording's nominal sampling rate. Pass this whenever it is
-            known -- if omitted, it is estimated from ``sample_times`` as the
-            median of consecutive differences, which is wrong whenever the
-            leading samples straddle a dropped stretch (the first two
-            *surviving* samples then look like one huge interval).
+            known. If omitted, it is estimated from ``sample_times`` as the
+            median of consecutive differences. That estimate is wrong when the
+            first surviving samples sit across a dropped stretch. The first two
+            surviving samples then look like one huge interval.
         timezone
             IANA timezone name, or ``None`` when the recording clock is already local.
 
@@ -207,10 +208,10 @@ class RecordingTimeline:
     def from_datapoint(cls, datapoint: BaseGaitDataset, *, timezone: str | None = None) -> RecordingTimeline:
         """Build a timeline from a single-recording dataset.
 
-        The dataset must carry the wall-clock time of every sample as its index,
-        which :func:`mobgap.data.uos.load_cwa_as_dataset` writes when called with
-        ``include_time_index=True``. Sample indices alone cannot be placed on the
-        clock exactly, because a recording that lost samples has fewer of them
+        The dataset must carry the wall-clock time of every sample as its index.
+        :func:`mobgap.data.uos.load_cwa_as_dataset` writes that index when called
+        with ``include_time_index=True``. Sample indices alone cannot be placed
+        on the clock exactly. A recording that lost samples has fewer of them
         than elapsed time suggests.
 
         The timezone is taken from ``recording_metadata["timezone"]`` unless it
@@ -258,7 +259,7 @@ class RecordingTimeline:
         Returns
         -------
         pandas.DatetimeIndex
-            Timezone-naive local timestamps, one per sample index.
+            Local timestamps with no timezone attached, one per sample index.
         """
         samples = np.asarray(samples)
 
@@ -302,15 +303,15 @@ def add_time_bins(
         Time bins to add. Each one adds the column named in :data:`TIME_BIN_COLUMNS`.
     day_start_hour
         Hour of the local clock at which a day starts, from 0 to 23. A day is
-        always 24 hours long, this only moves where it begins, for example to 4
-        so that walking after midnight counts towards the previous day. Whole
-        hours only, so that hourly bins always nest exactly 24 per day.
+        always 24 hours long. This only moves where it begins. Pass 4, for
+        example, so that walking after midnight counts towards the previous day.
+        Whole hours only, so that hourly bins always nest exactly 24 per day.
 
     Returns
     -------
     pandas.DataFrame
         Copy of ``wb_dmos`` with a ``start_time`` column and one column per
-        requested time bin, all timezone-naive local wall clock.
+        requested time bin, all local wall clock with no timezone attached.
     """
     start_times = timeline.timestamps(wb_dmos["start"].to_numpy())
     new_columns = {"start_time": start_times}
@@ -342,12 +343,13 @@ def time_bin_grid(timeline: RecordingTimeline, time_bin: TimeBin, *, day_start_h
     width = TIME_BIN_WIDTHS[time_bin]
     edges = _floor_to_time_bin(pd.DatetimeIndex([timeline.start, timeline.end]), time_bin, day_start_hour)
 
-    # the naive local clock runs backwards across a daylight saving fall-back, so the last sample can
-    # carry a later bin label than timeline.end does. Overshoot, and let the filter below cut back.
+    # the local clock with no timezone runs backwards across a daylight saving fall-back.
+    # the last sample can then carry a later bin label than timeline.end does.
+    # overshoot, and let the filter below cut back
     grid = pd.date_range(edges[0], edges[1] + 2 * width, freq=_TIME_BIN_FREQ[time_bin], name="bin_start")
 
-    # a bin whose first moment is at or after the end of the recording holds no samples. Comparing
-    # epoch seconds rather than local labels keeps that true across a fall-back.
+    # a bin whose first moment is at or after the end of the recording holds no samples.
+    # comparing epoch seconds rather than local labels keeps that true across a fall-back.
     return grid[_to_epoch_s(grid, timeline.timezone) < timeline.end_epoch_s]
 
 
@@ -373,15 +375,15 @@ def bin_coverage(grid: pd.DatetimeIndex, timeline: RecordingTimeline, time_bin: 
     -------
     numpy.ndarray
         Coverage of every bin, between 0 and 1. A DST fall-back bin holds two
-        wall-clock hours of samples merged under one naive local-time label;
-        its coverage is still clipped to 1 rather than reporting ~2.
+        wall-clock hours of samples under one local-time label with no timezone.
+        Coverage is still clipped to 1, not reported as about 2.
     """
     width = TIME_BIN_WIDTHS[time_bin]
     # epoch seconds rather than local labels, so a fall-back bin measures the two hours it holds
     edge_epoch_s = _to_epoch_s(grid.append(pd.DatetimeIndex([grid[-1] + width])), timeline.timezone)
 
     if timeline.sample_times is None:
-        # without measured sample times only the recording ends can cut a bin short
+        # without measured sample times, only the recording ends can cut a bin short
         starts = np.maximum(edge_epoch_s[:-1], timeline.start_epoch_s)
         ends = np.minimum(edge_epoch_s[1:], timeline.end_epoch_s)
         return np.clip((ends - starts) / width.total_seconds(), 0.0, 1.0)

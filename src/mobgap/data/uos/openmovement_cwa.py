@@ -1,7 +1,7 @@
 """Load Open Movement CWA files into MobGap datasets.
 
 UoS-MobGap extension. Not part of upstream MobGap.
-Requires ``omcwa`` package, which is installed by ``mobgap[uos]`` extra.
+Requires the ``omcwa`` package, installed by the ``mobgap[uos]`` extra.
 """
 
 from dataclasses import dataclass
@@ -28,11 +28,12 @@ CwaDtype = Literal["float64", "float32"]
 
 @dataclass(frozen=True)
 class _MaskedRecording:
-    """The subset of ``ProcessedRecording`` fields still needed once invalid samples are dropped.
+    """Fields of ``ProcessedRecording`` still needed after invalid samples are dropped.
 
-    omcwa can carry a non-uniform timeline itself (``ProcessedRecording.time_override``), but
-    ``valid``, ``clipped``, and ``metadata`` are never read again after masking, and masking them
-    costs two full-size copies: 120 MB on a week at 100 Hz. So this keeps only what is left.
+    omcwa can store a non-uniform timeline in ``ProcessedRecording.time_override``.
+    After masking, ``valid``, ``clipped``, and ``metadata`` are never read again.
+    Masking them would copy about 120 MB for a week at 100 Hz. This object
+    keeps only what is left.
     """
 
     sample_rate_hz: float
@@ -59,9 +60,10 @@ def _import_process_cwa() -> Any:
 
 
 def _drop_invalid_samples(out: "ProcessedRecording", invalid_count: int) -> _MaskedRecording:
-    """Return ``out`` with the omconvert-invalid samples removed.
+    """Return ``out`` with samples that omconvert marked invalid removed.
 
-    ``out.gyr`` is already known non-``None`` here, see the check right after ``process_cwa``.
+    ``out.gyr`` is already known to be non-``None`` here.
+    See the check right after ``process_cwa``.
     """
     if invalid_count == out.valid.size:
         raise ValueError("CWA recording has no valid samples after processing.")
@@ -83,8 +85,8 @@ def _recording_to_dataframe(
 ) -> tuple[pd.DataFrame, float]:
     """Convert an ``omcwa`` recording into MobGap sensor columns and units.
 
-    ``out.gyr`` must already be checked non-``None`` by the caller -- see the check
-    immediately after ``process_cwa`` in :func:`load_cwa_as_dataset`.
+    ``out.gyr`` must already be checked non-``None`` by the caller.
+    See the check immediately after ``process_cwa`` in :func:`load_cwa_as_dataset`.
     """
     df = pd.DataFrame(
         {
@@ -101,11 +103,11 @@ def _recording_to_dataframe(
     sampling_rate_hz = float(out.sample_rate_hz)
 
     if include_time_index:
-        # use unix seconds as a numeric index -- device-clock time, not necessarily UTC (AX3/AX6
-        # loggers are usually set to the local time of the study site and store no offset; see
-        # RecordingTimeline's timezone parameter). On some hpc stacks pandas DatetimeIndex and
-        # pd.to_datetime(..., unit="s") segfault, float indices do not.
-        # out.time is float64 already (omcwa's contract, regardless of the acc/gyr dtype).
+        # Unix seconds as a numeric index. This is device-clock time, not necessarily UTC.
+        # AX3/AX6 loggers are usually set to the local time of the study site and store no offset.
+        # See RecordingTimeline's timezone parameter. On some HPC stacks a pandas DatetimeIndex
+        # and pd.to_datetime(..., unit="s") segfault. Float indices do not.
+        # out.time is already float64. That is omcwa's contract, whatever the acc/gyr dtype.
         df.index = pd.Index(out.time, name="time")
     else:
         df.index = pd.RangeIndex(len(df), name="samples")
@@ -146,7 +148,7 @@ def load_cwa_as_dataset(
         Participant metadata required by mobgap pipelines. Accepted forms:
 
         - mapping / ``dict`` with MobGap keys ``height_m``, ``sensor_height_m``
-          (meters), or Mobilise-D keys ``Height``, ``SensorHeight`` (centimetres)
+          (metres), or Mobilise-D keys ``Height``, ``SensorHeight`` (centimetres)
         - :class:`pandas.Series` / :class:`pandas.DataFrame` (first row)
         - path to a Mobilise-D ``infoForAlgo.mat`` or a ``.csv`` with either schema
 
@@ -163,14 +165,14 @@ def load_cwa_as_dataset(
         If True, use a float Unix-time index in seconds from the processed
         recording. If False, use a :class:`pandas.RangeIndex` (default). Set
         this to True before passing the dataset to
-        :class:`mobgap.aggregation.uos.RecordingTimeline`, which requires a
-        time index and otherwise raises with a pointer back to this parameter.
+        :class:`mobgap.aggregation.uos.RecordingTimeline`. That class requires a
+        time index. Without it, it raises and points back to this parameter.
     timezone
         IANA timezone name of the study site, stored as the ``timezone``
         recording metadata key and read from there by
         :meth:`mobgap.aggregation.uos.RecordingTimeline.from_datapoint`. Leave
-        at ``None`` (default) when the logger clock already runs in local time,
-        which is how AX3/AX6 devices are normally configured. Set it only when
+        at ``None`` (default) when the logger clock already runs in local time.
+        That is how AX3/AX6 devices are normally configured. Set it only when
         the clock runs in UTC and the wall-clock bins should follow local time,
         daylight saving included.
     resample_hz
@@ -186,7 +188,7 @@ def load_cwa_as_dataset(
     calibration_source
         Source omconvert reads for AX6 auto-calibration. ``"data"`` (default)
         reads the calibration sectors directly and is faster. ``"player"``
-        uses omconvert's older interpolating-player path; pick it only to
+        uses omconvert's older interpolating-player path. Pick it only to
         reproduce calibration numerics computed before this became the
         omcwa default.
     drop_invalid
@@ -213,9 +215,9 @@ def load_cwa_as_dataset(
         ``dmo_thresholds`` is also ``None``.
     dtype
         Output precision for ``acc``/``gyr``. ``"float64"`` (default) matches
-        every consumer today. ``"float32"`` halves resample memory; per
-        omcwa, output stays within one float32 ULP of the float64 result, but
-        verify against your downstream pipeline before relying on it.
+        every consumer today. ``"float32"`` halves resample memory. Per
+        omcwa, output stays within one float32 ULP of the float64 result.
+        Verify against your downstream pipeline before relying on it.
 
     Returns
     -------
@@ -238,7 +240,7 @@ def load_cwa_as_dataset(
 
     Notes
     -----
-    Install (recommended: uv — https://docs.astral.sh/uv/):
+    Install with uv (https://docs.astral.sh/uv/), which is the recommended tool:
 
         ``uv sync --extra uos``
 
@@ -254,20 +256,20 @@ def load_cwa_as_dataset(
     Recording metadata added by this adapter (unless already present in
     ``recording_metadata``):
 
-    - ``cwa_source_path`` — absolute path to the source ``.cwa`` file
-    - ``cwa_start_time`` — Unix timestamp in seconds of the first processed
-      sample, on the device clock (usually local time, not UTC -- see
-      ``include_time_index`` above)
-    - ``cwa_calibration_success`` — omconvert auto-calibration success flag
-    - ``cwa_calibration_error_code`` — omconvert error code (0 on success)
-    - ``cwa_calibration_num_axes`` — accelerometer axes that reached the
+    - ``cwa_source_path``. Absolute path to the source ``.cwa`` file
+    - ``cwa_start_time``. Unix timestamp in seconds of the first processed
+      sample, on the device clock. Usually local time, not UTC. See
+      ``include_time_index`` above.
+    - ``cwa_calibration_success``. omconvert auto-calibration success flag
+    - ``cwa_calibration_error_code``. omconvert error code (0 on success)
+    - ``cwa_calibration_num_axes``. Accelerometer axes that reached the
       stationary-point coverage auto-calibration needs
-    - ``cwa_calibration_mean_svm_error`` — mean stationary-point fit error
+    - ``cwa_calibration_mean_svm_error``. Mean stationary-point fit error
       of the auto-calibration
-    - ``cwa_invalid_samples`` — count of invalid samples before optional dropping
-    - ``cwa_invalid_samples_dropped`` — invalid samples removed when
+    - ``cwa_invalid_samples``. Count of invalid samples before optional dropping
+    - ``cwa_invalid_samples_dropped``. Invalid samples removed when
       ``drop_invalid=True`` (0 when ``drop_invalid=False``)
-    - ``timezone`` — the ``timezone`` argument above, added only when it is not
+    - ``timezone``. The ``timezone`` argument above, added only when it is not
       ``None``, and read by
       :meth:`mobgap.aggregation.uos.RecordingTimeline.from_datapoint`
 
@@ -315,10 +317,10 @@ def load_cwa_as_dataset(
     if out.n_samples == 0:
         raise ValueError("CWA recording produced no samples after processing.")
 
-    # check before any masking work: AX3 recordings have no gyroscope, and there is no point
-    # dropping invalid samples from acc/time only to reject the recording a moment later.
+    # Check before any masking work. AX3 recordings have no gyroscope.
+    # There is no point dropping invalid samples from acc/time only to reject the recording a moment later.
     if out.gyr is None:
-        raise ValueError("CWA recording has no gyroscope data; MobGap requires acc + gyr.")
+        raise ValueError("CWA recording has no gyroscope data. MobGap requires acc + gyr.")
 
     # out.valid.size - sum, rather than (~out.valid).sum(), to skip a full-size inverted copy
     invalid_count = out.valid.size - int(out.valid.sum())
